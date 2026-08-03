@@ -1,93 +1,102 @@
 export type Role = 'super-admin' | 'operator' | 'guard'
 
-export type Priority = 'high' | 'medium' | 'low'
+export type Severity = 'high' | 'medium' | 'low'
 
-export type Severity = Priority
+export type TabId = 'wall' | 'map' | 'analytics' | 'incidents' | 'models' | 'trajectory'
 
-export type TabId = 'grid' | 'map' | 'forensics' | 'trajectory' | 'incidents'
+/**
+ * Layout presets supported by the Live Wall.
+ *  - focus    : 1 Main + 6 Peripheral (default)
+ *  - grid2x2  : 2×2 grid (4 streams)
+ *  - grid3x3  : 3×3 grid (9 streams)
+ *  - focus5   : 1 Main + 4 Split
+ *  - full     : Single Main Fullscreen
+ */
+export type LayoutId = 'focus' | 'grid2x2' | 'grid3x3' | 'focus5' | 'full'
 
-export type GridLayoutId = 'hikvision' | 'grid2x2' | 'grid3x3' | 'single'
+/** Reporting period used by Analytics / Incident Log / PDF export. */
+export type ReportPeriod = 'today' | 'week' | 'month' | 'all' | 'custom'
+
+export type ModelCategory =
+  | 'weapon'
+  | 'fire'
+  | 'traffic'
+  | 'safety'
+  | 'anpr'
+  | 'person'
+  | 'accident'
 
 export interface AiModel {
   id: string
   name: string
   short: string
-  category: 'weapon' | 'fire' | 'traffic' | 'safety' | 'anpr' | 'person'
-  icon: 'siren' | 'flame' | 'crosshair' | 'car' | 'usercheck' | 'shield'
-  active: boolean
+  category: ModelCategory
+  /** default severity per FYP proposal; user can override */
+  severity: Severity
 }
 
-export interface EventMarkerSpec {
-  id: string
-  /** Seconds into the demo timeline */
+/** A model firing at a specific second inside a looping camera clip. */
+export interface ClipEvent {
+  /** seconds into the clip */
   time: number
+  modelId: string
   title: string
   detail: string
   confidence: number
-  /** Model class that detected this event */
-  modelId: string
-  /** Priority drives the alert response, or verified */
-  priority: Priority
-  /** Optional forensic evidence (fine/plate/vehicle) */
   plate?: string
   vehicle?: string
-  fined?: boolean
+  speed?: number
 }
 
 export interface Camera {
   id: string
+  /** display number e.g. 1 => CAM 1 */
+  index: number
   name: string
+  zone: string
   ip: string
-  /** URL.createObjectURL result for the bound .mp4 */
-  videoUrl: string | null
-  fileName: string | null
-  enabledModels: string[]
-  verifiedEvents: string[]
-}
-
-export interface CameraPin {
-  id: string
-  /** 0..100 relative coordinates on the map */
+  /** looping demo video from /videos */
+  videoUrl: string
+  /** duration hint (sec) for looping */
+  duration: number
+  /** AI models running on this camera */
+  models: string[]
+  /** events fired by this camera's clip */
+  events: ClipEvent[]
+  /** map position 0..100 */
   x: number
   y: number
-  cameraId: string
+  /** true when the bound video was user-uploaded (blob URL, not persisted) */
+  customVideo?: boolean
 }
 
-export interface Stream {
-  /** Tile position (0-8) */
-  slot: number
-  cameraId: string | null
+export interface Incident {
+  id: string
+  /** wall-clock ISO when it fired */
+  firedAt: number
+  clockLabel: string
+  cameraId: string
+  cameraIndex: number
+  cameraName: string
+  zone: string
+  ip: string
+  modelId: string
+  event: string
+  detail: string
+  severity: Severity
+  confidence: number
+  plate?: string
+  vehicle?: string
+  speed?: number
+  acknowledged: boolean
+  dispatched: boolean
 }
 
 export interface Toast {
   id: string
-  markerId: string
-  cameraId: string
+  incidentId: string
   title: string
   detail: string
-  time: number
-  priority: 'medium' | 'low'
-}
-
-export interface AlertSnapshot {
-  parentId: number
-  slot: number
-  markerId: string
-  cameraId: string
-}
-
-export interface IncidentLogRow {
-  id: string
+  cameraLabel: string
   severity: Severity
-  timestamp: string
-  cameraId: string
-  ip: string
-  cameraName: string
-  event: string
-  modelId: string
-  confidence: number
-  plate?: string
-  vehicle?: string
-  fined?: boolean
-  time: number
 }

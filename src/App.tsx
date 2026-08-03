@@ -1,30 +1,31 @@
 import { AppProvider } from './store/AppContext'
-import TopBar from './components/layout/TopBar'
-import Sidebar from './components/layout/Sidebar'
-import LiveGrid from './components/grid/LiveGrid'
-import GisMap from './components/map/GisMap'
-import ForensicPanel from './components/forensics/ForensicPanel'
-import TrajectorySearch from './components/trajectory/TrajectorySearch'
-import IncidentLog from './components/incidents/IncidentLog'
-import SettingsDrawer from './components/drawers/SettingsDrawer'
-import ModelAssignmentDrawer from './components/drawers/ModelAssignmentDrawer'
-import AlertModal from './components/alerts/AlertModal'
-import ToastStack from './components/alerts/ToastStack'
+import TopBar from './components/TopBar'
+import Sidebar from './components/Sidebar'
+import LiveWall from './components/pages/LiveWall'
+import TacticalMap from './components/pages/TacticalMap'
+import AnalyticsPage from './components/pages/AnalyticsPage'
+import IncidentLog from './components/pages/IncidentLog'
+import ModelsConfig from './components/pages/ModelsConfig'
+import TrajectorySearch from './components/pages/TrajectorySearch'
 import { useApp } from './store/AppContext'
 
 function MainContent() {
   const { tab } = useApp()
   switch (tab) {
-    case 'grid':
-      return <LiveGrid />
+    case 'wall':
+      return <LiveWall />
     case 'map':
-      return <GisMap />
-    case 'forensics':
-      return <ForensicPanel />
-    case 'trajectory':
-      return <TrajectorySearch />
+      return <TacticalMap />
+    case 'analytics':
+      return <AnalyticsPage />
     case 'incidents':
       return <IncidentLog />
+    case 'trajectory':
+      return <TrajectorySearch />
+    case 'models':
+      return <ModelsConfig />
+    default:
+      return <LiveWall />
   }
 }
 
@@ -33,18 +34,10 @@ export default function App() {
     <AppProvider>
       <div className="flex h-screen w-screen flex-col overflow-hidden bg-base text-slate-200">
         <TopBar />
-        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
           <Sidebar />
-          <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <MainContent />
-          </main>
+          <MainContent />
         </div>
-
-        {/* Overlays */}
-        <SettingsDrawer />
-        <ModelAssignmentDrawer />
-        <AlertModal />
-        <ToastStack />
       </div>
     </AppProvider>
   )

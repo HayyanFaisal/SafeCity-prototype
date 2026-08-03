@@ -1,223 +1,282 @@
-import React, { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Crosshair, Pause, Play, Video as VideoIcon } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { X, Play, Pause } from 'lucide-react'
 import { useApp } from '../../store/AppContext'
-import { EVENT_MARKERS } from '../../constants'
-import { formatTime } from '../../lib/format'
-import type { EventMarkerSpec } from '../../types'
+import { SEVERITY_META } from '../../constants'
+import ModelBadge from '../ui/ModelBadge'
+import { fmtStampShort } from '../../lib/format'
 
-const DURATION = 80
+interface ForensicPanelProps {
+  cameraId: string
+  onClose: () => void
+}
 
-export default function ForensicPanel() {
-  const { focusedCameraId, getCamera, closeForensics, forensicSeek, setForensicSeek } = useApp()
-  const camera = focusedCameraId ? getCamera(focusedCameraId) : null
+/**
+ * Forensic single-stream inspection: timeline scrubber with visual markers at
+ * every ClipEvent timestamp, hover tooltip (event name, confidence) and
+ * click-to-seek. Playback is intentionally NOT looped here so an operator can
+ * scrub back to an event after it passed.
+ */
+export default function ForensicPanel({ cameraId, onClose }: ForensicPanelProps) {
+  const { cameras, speed, setSpeed, incidents } = useApp()
+  const cam = cameras.find((c) => c.id === cameraId)
 
-  const videoRef = useRef<HTMLVideoElement>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
   const [currentTime, setCurrentTime] = useState(0)
-  const [duration, setDuration] = useState(DURATION)
-  const [hoverMarker, setHoverMarker] = useState<EventMarkerSpec | null>(null)
-  const [playing, setPlaying] = useState(false)
+  const [duration, setDuration] = useState(0)
+  const [playing, setPlaying] = useState(true)
+  const [hoverEvent, setHoverEvent] = useState<{ time: number; x: number } | null>(null)
 
-  // Reset + autoplay when camera changes
   useEffect(() => {
-    setCurrentTime(0)
-    setHoverMarker(null)
-    const vid = videoRef.current
-    if (vid) {
-      vid.currentTime = 0
-      void vid.play().catch(() => {})
+    const el = videoRef.current
+    if (!el) return
+    const onTime = () => setCurrentTime(el.currentTime)
+    const onLoaded = () => setDuration(el.duration || 0)
+    const onEnded = () => setPlaying(false)
+    el.addEventListener('timeupdate', onTime)
+    el.addEventListener('loadedmetadata', onLoaded)
+    el.addEventListener('ended', onEnded)
+    return () => {
+      el.removeEventListener('timeupdate', onTime)
+      el.removeEventListener('loadedmetadata', onLoaded)
+      el.removeEventListener('ended', onEnded)
     }
-  }, [focusedCameraId])
+  }, [cameraId])
 
-  // Consume a queued jump-to-timestamp seek (from toast "JUMP TO TIMESTAMP")
   useEffect(() => {
-    if (forensicSeek === null) return
-    const vid = videoRef.current
-    if (vid) {
-      vid.currentTime = Math.max(0, Math.min(forensicSeek, duration || DURATION))
-      setCurrentTime(forensicSeek)
+    const el = videoRef.current
+    if (!el) return
+    el.playbackRate = speed
+  }, [speed, cameraId])
+
+  const seekTo = useCallback((time: number) => {
+    const el = videoRef.current
+    if (el) {
+      el.currentTime = time
+      setCurrentTime(time)
       setPlaying(true)
-      void vid.play().catch(() => {})
+      void el.play().catch(() => {})
     }
-    setForensicSeek(null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forensicSeek])
+  }, [])
 
-  const togglePlay = () => {
-    const vid = videoRef.current
-    if (!vid) return
-    if (vid.paused) {
-      void vid.play().catch(() => {})
+  const togglePlay = useCallback(() => {
+    const el = videoRef.current
+    if (!el) return
+    if (el.paused) {
+      void el.play().catch(() => {})
       setPlaying(true)
     } else {
-      vid.pause()
+      el.pause()
       setPlaying(false)
     }
-  }
+  }, [])
 
-  const seekTo = (time: number) => {
-    const vid = videoRef.current
-    if (!vid) return
-    vid.currentTime = Math.max(0, Math.min(time, duration || DURATION))
-    setCurrentTime(time)
-    if (playing) void vid.play().catch(() => {})
-  }
+  if (!cam) return null
 
-  const onScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
-    seekTo(Number(e.target.value))
-  }
+  const durationSec = duration || cam.duration
+  const sortedEvents = [...cam.events].sort((a, b) => a.time - b.time)
 
-  if (!camera) {
-    return (
-      <div className="grid min-h-0 flex-1 place-items-center p-6">
-        <div className="rounded-xl border border-edge bg-surface p-8 text-center">
-          <VideoIcon size={32} className="mx-auto mb-3 text-slate-600" />
-          <div className="text-sm font-semibold text-slate-300">No camera selected</div>
-          <div className="mt-1 font-mono text-[11px] text-slate-500">
-            Click a live tile or map pin to open playback & forensic inspection
-          </div>
-        </div>
-      </div>
-    )
-  }
+  // incidents for THIS camera (real, from the shared persisted store)
+  const camIncidents = incidents
+    .filter((i) => i.cameraId === cam.id)
+    .sort((a, b) => a.firedAt - b.firedAt)
+
+  const pct = (t: number) => Math.min(100, Math.max(0, (t / Math.max(durationSec, 1)) * 100))
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
+    <div className="w-full max-w-4xl animate-confirm-pop rounded-xl border border-edge/60 bg-deep/95 shadow-2xl backdrop-blur-xl">
       {/* Header */}
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-edge bg-surface/70 p-2 backdrop-blur">
-        <button
-          onClick={closeForensics}
-          className="flex items-center gap-1.5 rounded-lg border border-edge bg-base px-3 py-1.5 text-[12px] font-semibold text-slate-300 transition hover:border-accent/40 hover:text-slate-100"
-        >
-          <ArrowLeft size={14} /> Back to Grid
-        </button>
-        <div className="min-w-0">
-          <div className="truncate text-[13px] font-bold text-slate-100">{camera.name}</div>
-          <div className="font-mono text-[10px] text-slate-500">{camera.id} · {camera.ip}</div>
+      <div className="flex items-center justify-between rounded-t-xl border-b border-edge/60 bg-surface2/60 px-5 py-3">
+        <div>
+          <div className="hud-label text-sm font-bold text-gold-soft">
+            FORENSIC INSPECTION — CAM {cam.index}
+          </div>
+          <div className="text-[11px] text-slate-400">
+            {cam.name} · {cam.ip}
+          </div>
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          <span className="flex items-center gap-1.5 rounded-lg border border-danger/40 bg-danger/10 px-2 py-1 font-mono text-[10px] font-bold text-red-400">
-            <span className="h-1.5 w-1.5 animate-live-blink rounded-full bg-red-500" /> PLAYBACK
+        <div className="flex items-center gap-2">
+          <span className="rounded border border-cyan/40 bg-cyan/10 px-2 py-0.5 text-[10px] font-bold text-cyan">
+            LIVE EVENT TIMESTAMPS
           </span>
-          <button
-            onClick={togglePlay}
-            className="flex items-center gap-1.5 rounded-lg border border-accent/50 bg-accent/15 px-3 py-1.5 text-[12px] font-semibold text-cyan-300 transition hover:bg-accent/25"
-          >
-            {playing ? <Pause size={14} /> : <Play size={14} />}
-            {playing ? 'Pause' : 'Play'}
+          <button onClick={onClose} className="btn-icon" title="Close">
+            <X className="h-4 w-4" />
           </button>
         </div>
       </div>
 
       {/* Video + timeline */}
-      <div className="flex min-h-0 flex-1 flex-col gap-3">
-        <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-edge bg-base">
+      <div className="space-y-4 p-5">
+        {/* Video stage */}
+        <div className="relative overflow-hidden rounded-lg border border-edge/60 bg-black">
           <video
             ref={videoRef}
-            data-forensics
-            src={camera.videoUrl ?? undefined}
+            key={`forensic-${cam.id}`}
+            src={cam.videoUrl}
+            className="h-full w-full max-h-[32vh] object-contain bg-black"
+            autoPlay
             muted
             playsInline
-            preload="auto"
-            className="absolute inset-0 h-full w-full object-contain"
-            onTimeUpdate={(e) => {
-              setCurrentTime(e.currentTarget.currentTime)
-              setPlaying(!e.currentTarget.paused)
-            }}
-            onLoadedMetadata={(e) => {
-              const d = e.currentTarget.duration
-              if (Number.isFinite(d) && d > 0) setDuration(d)
-            }}
-            onEnded={() => {
-              const vid = videoRef.current
-              if (vid) {
-                vid.currentTime = 0
-                void vid.play().catch(() => {})
-              }
-            }}
+          />
+          <div className="absolute left-2 top-2 flex items-center gap-2">
+            <span className="hud-label rounded bg-surface/80 px-2 py-0.5 text-[10px] font-bold text-gold-soft">
+              CAM {cam.index}
+            </span>
+            <span className="rounded bg-danger/80 px-2 py-0.5 text-[10px] font-bold text-white animate-live-blink">
+              INSPECTION
+            </span>
+          </div>
+          {/* Scanlines */}
+          <div className="scanlines pointer-events-none absolute inset-0" />
+        </div>
+
+        {/* Transport controls */}
+        <div className="flex items-center gap-3">
+          <button onClick={togglePlay} className="btn-icon" title={playing ? 'Pause' : 'Play'}>
+            {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+          </button>
+          <span className="font-mono text-xs text-cyan">
+            {fmtStampShort(currentTime * 1000)} / {fmtStampShort(durationSec * 1000)}
+          </span>
+          <div className="h-5 w-px bg-edge2/50" />
+          <span className="text-xs text-slate-400 font-semibold">SPEED:</span>
+          <select
+            value={speed}
+            onChange={(e) => setSpeed(parseFloat(e.target.value))}
+            className="btn text-xs"
+          >
+            <option value={1}>1×</option>
+            <option value={2}>2×</option>
+          </select>
+          <div className="flex-1" />
+          <span className="text-[10px] text-slate-500">
+            {sortedEvents.length} event{sortedEvents.length === 1 ? '' : 's'} on this clip
+          </span>
+        </div>
+
+        {/* Timeline scrubber with event markers */}
+        <div className="relative">
+          {/* track */}
+          <input
+            type="range"
+            min={0}
+            max={Math.max(durationSec, 1)}
+            step={0.05}
+            value={currentTime}
+            onChange={(e) => seekTo(parseFloat(e.target.value))}
+            className="w-full accent-cyan cursor-pointer"
+            aria-label="Timeline scrubber"
           />
 
-          {/* Timeline scrubber */}
-          <div className="absolute inset-x-0 bottom-0 border-t border-edge bg-base/90 p-3 backdrop-blur">
-            {/* Marker flags */}
-            <div className="relative mb-1.5 h-7">
-              {EVENT_MARKERS.map((marker) => {
-                const pct = (marker.time / (duration || DURATION)) * 100
-                const color = marker.priority === 'high' ? 'bg-danger' : marker.priority === 'medium' ? 'bg-warn' : 'bg-accent'
-                return (
-                  <div key={marker.id} className="absolute -translate-x-1/2" style={{ left: `${pct}%` }}>
-                    <button
-                      onClick={() => seekTo(marker.time)}
-                      onMouseEnter={() => setHoverMarker(marker)}
-                      onMouseLeave={() => setHoverMarker(null)}
-                      className="group flex flex-col items-center"
-                      aria-label={`${marker.title} at ${formatTime(marker.time)}`}
-                    >
-                      <span className={`h-5 w-1.5 rounded-sm ${color} shadow-md transition group-hover:scale-y-125`} />
-                      <span className={`mt-0.5 h-1.5 w-1.5 rounded-full ${color}`} />
-                    </button>
+          {/* event marker flags */}
+          <div className="pointer-events-none relative mt-2 h-5">
+            {sortedEvents.map((ev) => {
+              const sev = SEVERITY_META[ev.modelId === 'helmet' ? 'low' : 'medium']
+              const color = ev.modelId === 'weapon' || ev.modelId === 'fire' || ev.modelId === 'accident' || ev.modelId === 'abandoned'
+                ? '#F43F5E'
+                : sev.color
+              const left = pct(ev.time)
+              return (
+                <button
+                  key={`m-${ev.time}-${ev.modelId}`}
+                  className="pointer-events-auto absolute top-0 h-5 w-2 -translate-x-1/2 rounded-sm"
+                  style={{ left: `${left}%`, backgroundColor: color }}
+                  title={`${ev.title} @ ${fmtStampShort(ev.time * 1000)}`}
+                  onClick={() => seekTo(ev.time)}
+                  onMouseEnter={(e) =>
+                    setHoverEvent({ time: ev.time, x: e.currentTarget.getBoundingClientRect().left })
+                  }
+                  onMouseLeave={() => setHoverEvent(null)}
+                />
+              )
+            })}
+
+            {/* hover tooltip */}
+            {hoverEvent && (() => {
+              const ev = cam.events.find((e) => e.time === hoverEvent.time)
+              if (!ev) return null
+              const sevColor =
+                ev.modelId === 'weapon' || ev.modelId === 'fire' || ev.modelId === 'accident' || ev.modelId === 'abandoned'
+                  ? '#F43F5E'
+                  : SEVERITY_META[ev.modelId === 'helmet' ? 'low' : 'medium'].color
+              return (
+                <div
+                  className="pointer-events-none absolute -top-16 z-10 w-52 -translate-x-1/2 rounded-lg border bg-surface/95 p-2.5 shadow-xl backdrop-blur-xl"
+                  style={{ left: `${pct(ev.time)}%`, borderColor: sevColor }}
+                >
+                  <div className="text-[11px] font-bold" style={{ color: sevColor }}>
+                    {ev.title}
                   </div>
-                )
-              })}
-            </div>
-
-            <input
-              type="range"
-              min={0}
-              max={duration || DURATION}
-              step={0.1}
-              value={Math.min(currentTime, duration || DURATION)}
-              onChange={onScrub}
-              className="w-full accent-cyan-400"
-            />
-            <div className="mt-1 flex items-center justify-between font-mono text-[10.5px]">
-              <span className="text-cyan-300">{formatTime(currentTime)}</span>
-              <span className="text-slate-600">{formatTime(duration || DURATION)}</span>
-            </div>
-
-            {/* Marker tooltip */}
-            {hoverMarker && (
-              <div className="pointer-events-none absolute bottom-16 left-1/2 z-20 w-60 -translate-x-1/2 rounded-xl border border-edge bg-surface p-3 shadow-panel">
-                <div className="flex items-center gap-2">
-                  <span className={`h-2 w-2 rounded-full ${hoverMarker.priority === 'high' ? 'bg-danger' : hoverMarker.priority === 'medium' ? 'bg-warn' : 'bg-accent'}`} />
-                  <span className="text-[12px] font-bold text-slate-100">{hoverMarker.title}</span>
+                  <div className="mt-0.5 text-[10px] text-slate-400">{ev.detail}</div>
+                  <div className="mt-1 flex items-center justify-between text-[10px]">
+                    <span className="font-mono text-cyan">@{fmtStampShort(ev.time * 1000)}</span>
+                    <span className="font-bold text-warn">{ev.confidence}%</span>
+                  </div>
+                  {ev.plate && <div className="text-[10px] text-slate-300 mt-0.5">Plate: {ev.plate}</div>}
                 </div>
-                <div className="mt-1.5 font-mono text-[10px] leading-relaxed text-slate-400">
-                  <div>TIME · {formatTime(hoverMarker.time)}</div>
-                  <div>CONFIDENCE · {hoverMarker.confidence.toFixed(1)}%</div>
-                  <div>MODEL · {hoverMarker.modelId.toUpperCase()}</div>
-                  {hoverMarker.plate && <div>PLATE · {hoverMarker.plate}</div>}
-                  {hoverMarker.vehicle && <div>VEHICLE · {hoverMarker.vehicle}</div>}
-                </div>
-                <div className="mt-2 border-t border-edge pt-2 text-[10.5px] leading-snug text-slate-300">{hoverMarker.detail}</div>
-                <div className="mt-1.5 text-center font-mono text-[9px] text-cyan-400">CLICK FLAG TO SEEK</div>
-              </div>
-            )}
+              )
+            })()}
           </div>
         </div>
 
-        {/* Event strip */}
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-edge bg-surface/70 p-2 backdrop-blur">
-          <Crosshair size={14} className="text-accent" />
-          <span className="font-mono text-[10px] tracking-widest text-slate-500">EVENT TIMELINE</span>
-          <div className="flex flex-wrap gap-1.5">
-            {EVENT_MARKERS.map((marker) => (
-              <button
-                key={marker.id}
-                onClick={() => seekTo(marker.time)}
-                className={`flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[9.5px] transition hover:opacity-100 ${
-                  marker.priority === 'high'
-                    ? 'border-danger/40 bg-danger/10 text-red-400'
-                    : marker.priority === 'medium'
-                      ? 'border-warn/40 bg-warn/10 text-amber-400'
-                      : 'border-accent/30 bg-accent/10 text-cyan-300'
-                }`}
-              >
-                <span className={`h-1.5 w-1.5 rounded-full ${marker.priority === 'high' ? 'bg-danger' : marker.priority === 'medium' ? 'bg-warn' : 'bg-accent'}`} />
-                @{formatTime(marker.time)} {marker.title}
-              </button>
-            ))}
+        {/* Event list */}
+        <div className="rounded-lg border border-edge/50 bg-surface2/30 p-3">
+          <div className="hud-label mb-2 text-[10px] text-slate-400">CLICK MARKER TO SEEK</div>
+          <div className="grid grid-cols-2 gap-2">
+            {sortedEvents.map((ev) => {
+              const isHigh =
+                ev.modelId === 'weapon' || ev.modelId === 'fire' || ev.modelId === 'accident' || ev.modelId === 'abandoned'
+              const color = isHigh ? '#F43F5E' : SEVERITY_META[ev.modelId === 'helmet' ? 'low' : 'medium'].color
+              return (
+                <button
+                  key={`l-${ev.time}`}
+                  onClick={() => seekTo(ev.time)}
+                  className="flex items-center justify-between rounded border px-2 py-1.5 text-left transition hover:opacity-80"
+                  style={{ borderColor: `${color}66`, backgroundColor: `${color}12` }}
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-[11px] font-bold" style={{ color }}>
+                      {ev.title}
+                    </div>
+                    <div className="flex items-center gap-2 text-[9px] text-slate-400">
+                      <ModelBadge id={ev.modelId} size="xs" />
+                      <span className="font-mono">@{fmtStampShort(ev.time * 1000)}</span>
+                    </div>
+                  </div>
+                  <span className="ml-2 flex-shrink-0 font-mono text-[10px] text-warn">
+                    {ev.confidence}%
+                  </span>
+                </button>
+              )
+            })}
           </div>
         </div>
+
+        {/* Related real incidents for this camera */}
+        {camIncidents.length > 0 && (
+          <div className="rounded-lg border border-edge/50 bg-surface2/30 p-3">
+            <div className="hud-label mb-2 text-[10px] text-slate-400">
+              HISTORICAL INCIDENTS — THIS CAMERA (FROM PERSISTED LOG)
+            </div>
+            <div className="max-h-28 overflow-y-auto space-y-1">
+              {camIncidents.map((inc) => (
+                <div
+                  key={inc.id}
+                  className="flex items-center justify-between rounded border border-edge/40 bg-surface/40 px-2 py-1 text-[10px]"
+                >
+                  <span className="text-slate-300">{inc.event}</span>
+                  <span className="flex items-center gap-2">
+                    <span style={{ color: SEVERITY_META[inc.severity].color }} className="font-bold">
+                      {SEVERITY_META[inc.severity].label}
+                    </span>
+                    <span className="font-mono text-slate-500">
+                      {new Date(inc.firedAt).toLocaleString('en-GB', { hour12: false })}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

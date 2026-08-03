@@ -1,85 +1,79 @@
+// Web Audio siren for critical alerts — no external asset required.
 let ctx: AudioContext | null = null
-let sirenTimer: number | null = null
-let sirenNodes: { stop: () => void } | null = null
+let osc: OscillatorNode | null = null
+let gain: GainNode | null = null
+let lfo: OscillatorNode | null = null
+let lfoGain: GainNode | null = null
 
-function ensureCtx(): AudioContext | null {
-  if (typeof window === 'undefined') return null
+function ensureCtx(): AudioContext {
   if (!ctx) {
-    const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-    if (!AC) return null
+    const AC = window.AudioContext || (window as any).webkitAudioContext
     ctx = new AC()
   }
-  if (ctx.state === 'suspended') void ctx.resume()
   return ctx
 }
 
-/** Two-tone emergency siren loop (WebAudio synthesis, no asset needed). */
-export function playSiren(): void {
-  const ac = ensureCtx()
-  if (!ac) return
-  stopSiren()
-  const master = ac.createGain()
-  master.gain.value = 0.12
-  master.connect(ac.destination)
+export function playSiren() {
+  const c = ensureCtx()
+  if (c.state === 'suspended') c.resume()
+  if (osc) return // already playing
 
-  const osc = ac.createOscillator()
+  osc = c.createOscillator()
+  gain = c.createGain()
+  lfo = c.createOscillator()
+  lfoGain = c.createGain()
+
   osc.type = 'sawtooth'
-  osc.frequency.value = 620
-  osc.connect(master)
-  osc.start()
+  osc.frequency.value = 660
 
-  let rising = true
-  let freq = 620
-  const step = () => {
-    if (rising) {
-      freq += 26
-      if (freq >= 940) rising = false
-    } else {
-      freq -= 26
-      if (freq <= 620) rising = true
-    }
-    osc.frequency.setValueAtTime(freq, ac.currentTime)
-  }
-  const id = window.setInterval(step, 46)
-  sirenTimer = id
-  sirenNodes = {
-    stop: () => {
-      window.clearInterval(id)
-      try {
-        osc.stop()
-      } catch {
-        /* already stopped */
-      }
-      master.disconnect()
-    },
-  }
-}
+  // LFO sweeps the pitch like an emergency siren
+  lfo.type = 'sine'
+  lfo.frequency.value = 2.2
+  lfoGain.gain.value = 220
 
-export function stopSiren(): void {
-  if (sirenTimer !== null) {
-    window.clearInterval(sirenTimer)
-    sirenTimer = null
-  }
-  if (sirenNodes) {
-    sirenNodes.stop()
-    sirenNodes = null
-  }
-}
+  lfo.connect(lfoGain)
+  lfoGain.connect(osc.frequency)
 
-/** Acknowledged / confirm blip. */
-export function playAck(): void {
-  const ac = ensureCtx()
-  if (!ac) return
-  const t = ac.currentTime
-  const osc = ac.createOscillator()
-  const gain = ac.createGain()
-  osc.type = 'sine'
-  osc.frequency.setValueAtTime(880, t)
-  osc.frequency.setValueAtTime(1320, t + 0.09)
-  gain.gain.setValueAtTime(0.08, t)
-  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22)
+  gain.gain.value = 0.0001
+  gain.gain.exponentialRampToValueAtTime(0.12, c.currentTime + 0.08)
+
   osc.connect(gain)
-  gain.connect(ac.destination)
-  osc.start(t)
-  osc.stop(t + 0.24)
+  gain.connect(c.destination)
+
+  osc.start()
+  lfo.start()
+}
+
+export function stopSiren() {
+  if (!ctx || !osc || !gain) return
+  try {
+    gain.gain.cancelScheduledValues(ctx.currentTime)
+    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.15)
+    osc.stop(ctx.currentTime + 0.2)
+    lfo?.stop(ctx.currentTime + 0.2)
+  } catch {
+    /* noop */
+  }
+  osc = null
+  lfo = null
+  gain = null
+  lfoGain = null
+}
+
+/** Short confirmation blip (medium alerts). */
+export function blip() {
+  const c = ensureCtx()
+  if (c.state === 'suspended') c.resume()
+  const o = c.createOscillator()
+  const g = c.createGain()
+  o.type = 'triangle'
+  o.frequency.value = 880
+  g.gain.value = 0.0001
+  g.gain.exponentialRampToValueAtTime(0.08, c.currentTime + 0.02)
+  g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + 0.25)
+  o.connect(g)
+  g.connect(c.destination)
+  o.start()
+  o.stop(c.currentTime + 0.28)
 }

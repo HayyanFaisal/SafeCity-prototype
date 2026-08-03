@@ -1,781 +1,505 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type {
   AiModel,
-  AlertSnapshot,
   Camera,
-  CameraPin,
-  GridLayoutId,
-  IncidentLogRow,
-  Priority,
+  Incident,
+  LayoutId,
+  ReportPeriod,
   Role,
-  Stream,
+  Severity,
   TabId,
   Toast,
 } from '../types'
+import { AI_MODELS, CAMERAS, DUTY_OFFICER } from '../constants'
 import {
-  AI_MODEL_SEEDS,
-  CAMERA_SEEDS,
-  DEFAULT_MODEL_ACTIVE,
-  EVENT_MARKERS,
-  DEFAULT_IP_PREFIX,
-} from '../constants'
-import { createSyntheticClip } from '../lib/syntheticVideo'
-import { playSiren, stopSiren } from '../lib/audio'
+  loadCameraVideoUrls,
+  loadFiredKeys,
+  loadIncidents,
+  loadSeverityOverrides,
+  saveCameraVideoUrl,
+  saveFiredKeys,
+  saveIncidents,
+  saveSeverityOverrides,
+} from '../lib/storage'
+import { blip, playSiren, stopSiren } from '../lib/audio'
 
-const SEED_PARENT = 7
+interface AppState {
+  // clock
+  now: number
 
-export interface PriorityBuckets {
-  high: string[]
-  medium: string[]
-  low: string[]
-}
-
-interface ModelEditor {
-  models: AiModel[]
-  toggle: (id: string) => void
-  setEnabledForCamera: (cameraId: string, modelId: string, on: boolean) => void
-}
-
-interface AppStateValue {
-  // RBAC
+  // rbac
   role: Role
   setRole: (r: Role) => void
-  canEditMaps: boolean
-  canEditSettings: boolean
-  canAssignModels: boolean
+  canEdit: boolean
 
-  // Tabs + drawers
+  // navigation
   tab: TabId
   setTab: (t: TabId) => void
-  settingsOpen: boolean
-  setSettingsOpen: (v: boolean) => void
-  modelDrawerOpen: boolean
-  setModelDrawerOpen: (v: boolean) => void
 
-  // Grid
-  layout: GridLayoutId
-  setLayout: (l: GridLayoutId) => void
-  streams: Stream[]
-  isMasterPlaying: boolean
-  setMasterPlaying: (v: boolean) => void
-  mountFileToSlot: (slot: number, file: File) => void
-  unmountSlot: (slot: number) => void
-  swapSlots: (a: number, b: number) => void
-  bootDemo: () => void
-  demoBusy: boolean
-
-  // Cameras + map
+  // cameras
   cameras: Camera[]
-  pins: CameraPin[]
-  draftPin: { x: number; y: number; cameraId: string; isNew: boolean } | null
-  beginPlot: (x: number, y: number) => void
-  savePin: (cameraId: string, x: number, y: number, isNew: boolean) => void
-  deleteDraft: () => void
-  deletePin: (pinId: string) => void
-  updateCamera: (cameraId: string, patch: Partial<Camera>) => void
-  mapImageUrl: string | null
-  mapImageName: string | null
-  uploadMapImage: (file: File) => void
-  restoreDefaultMap: () => void
-  getCamera: (id: string | null) => Camera | null
-  findPinByCamera: (cameraId: string) => CameraPin | undefined
-  canPlacePin: boolean
+  getCamera: (id: string | null) => Camera | undefined
+  setCameraVideo: (id: string, url: string) => void
+  moveCamera: (id: string, x: number, y: number) => void
+  updateCameraDetails: (
+    id: string,
+    patch: Partial<Pick<Camera, 'name' | 'ip'>>,
+  ) => void
+  setCameraModels: (id: string, modelIds: string[]) => void
+  toggleCameraModel: (id: string, modelId: string) => void
 
-  // Forensic
-  focusedCameraId: string | null
-  openForensics: (cameraId: string) => void
-  closeForensics: () => void
-  focusStream: (cameraId: string) => void
-  forensicSeek: number | null
-  setForensicSeek: (time: number | null) => void
+  // models & severity
+  models: AiModel[]
+  severityOverrides: Record<string, Severity>
+  setSeverity: (modelId: string, sev: Severity) => void
+  severityOf: (modelId: string) => Severity
 
-  // Model manager & assignment drawer
-  modelEditor: ModelEditor
-  priorityBuckets: PriorityBuckets
-  setPriorityBuckets: (b: PriorityBuckets) => void
-  priorityOf: (modelId: string) => Priority
+  // live wall
+  layout: LayoutId
+  setLayout: (l: LayoutId) => void
+  order: string[] // camera ids in display order; order[0] = main
+  focusCamera: (id: string) => void
+  swapTiles: (fromIndex: number, toIndex: number) => void
+  mainId: string
+  playing: boolean
+  setPlaying: (v: boolean) => void
+  speed: number
+  setSpeed: (s: number) => void
 
-  // Alerts
-  alertModal: AlertSnapshot | null
-  acknowledgeAlert: () => void
+  // forensic playback panel
+  forensicCameraId: string | null
+  openForensic: (id: string) => void
+  closeForensic: () => void
+
+  // alerts
+  incidents: Incident[]
   toasts: Toast[]
   dismissToast: (id: string) => void
+  criticalAlert: Incident | null
+  acknowledgeAlert: () => void
+  dispatchAlert: (incident: Incident) => void
   soundEnabled: boolean
   setSoundEnabled: (v: boolean) => void
+  resetSimulation: () => void
 
-  // Incident log
-  incidentRows: IncidentLogRow[]
+  // reporting period — shared by Analytics, Incident Log and PDF export
+  reportPeriod: ReportPeriod
+  setReportPeriod: (p: ReportPeriod) => void
+  customRange: { from: number; to: number } | null
+  setCustomRange: (r: { from: number; to: number } | null) => void
 
-  // Media
-  generateClip: (cameraId: string) => Promise<Blob>
-  revokeCameras: () => void
+  // dispatch log (whatsapp/sms simulation)
+  dispatchLog: DispatchEntry[]
 }
 
-const AppContext = createContext<AppStateValue | null>(null)
-
-function initCameras(): Camera[] {
-  return CAMERA_SEEDS.map((seed) => ({
-    id: seed.id,
-    name: seed.name,
-    ip: seed.ip,
-    videoUrl: null,
-    fileName: null,
-    enabledModels: Object.keys(DEFAULT_MODEL_ACTIVE).filter((m) => DEFAULT_MODEL_ACTIVE[m]),
-    verifiedEvents: [],
-  }))
+export interface DispatchEntry {
+  id: string
+  incidentId: string
+  channel: 'WhatsApp' | 'SMS' | 'Call'
+  to: string
+  message: string
+  at: number
+  status: 'sending' | 'delivered'
 }
 
-function initPins(): CameraPin[] {
-  return CAMERA_SEEDS.map((seed, i) => ({
-    id: `pin-${i + 1}`,
-    x: seed.x,
-    y: seed.y,
-    cameraId: seed.id,
-  }))
-}
+const AppContext = createContext<AppState | null>(null)
 
-function buildIncidentRows(cameras: Camera[], firedAt: string): IncidentLogRow[] {
-  const rows: IncidentLogRow[] = []
-  for (const marker of EVENT_MARKERS) {
-    const camera = cameras.find((c) => c.enabledModels.includes(marker.modelId))
-    if (!camera) continue
-    rows.push({
-      id: marker.id,
-      severity: marker.priority,
-      timestamp: firedAt,
-      cameraId: camera.id,
-      ip: camera.ip,
-      cameraName: camera.name,
-      event: marker.title,
-      modelId: marker.modelId,
-      confidence: marker.confidence,
-      plate: marker.plate,
-      vehicle: marker.vehicle,
-      fined: marker.fined,
-      time: marker.time,
-    })
-  }
-  return rows.sort((a, b) => a.time - b.time)
-}
+const DEFAULT_ORDER = CAMERAS.map((c) => c.id)
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
+  const [now, setNow] = useState(Date.now())
   const [role, setRole] = useState<Role>('super-admin')
-  const [tab, setTab] = useState<TabId>('grid')
+  const [tab, setTab] = useState<TabId>('wall')
 
-  // Drawers
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [modelDrawerOpen, setModelDrawerOpen] = useState(false)
-
-  // Cameras / map
-  const [cameras, setCameras] = useState<Camera[]>(initCameras)
-  const [pins, setPins] = useState<CameraPin[]>(initPins)
-  const [draftPin, setDraftPin] = useState<{ x: number; y: number; cameraId: string; isNew: boolean } | null>(null)
-  const [mapImageUrl, setMapImageUrl] = useState<string | null>('/society-map.svg')
-  const [mapImageName, setMapImageName] = useState<string | null>('society-map.svg (default)')
-
-  // Grid
-  const [layout, setLayout] = useState<GridLayoutId>('hikvision')
-  const [streams, setStreams] = useState<Stream[]>(() =>
-    Array.from({ length: 9 }, (_, slot) => ({ slot, cameraId: null })),
-  )
-  const [isMasterPlaying, setMasterPlaying] = useState(false)
-  const [demoBusy, setDemoBusy] = useState(false)
-
-  // Forensics
-  const [focusedCameraId, setFocusedCameraId] = useState<string | null>(null)
-  const [forensicSeek, setForensicSeek] = useState<number | null>(null)
-
-  // Models & priority
-  const [models, setModels] = useState<AiModel[]>(() =>
-    AI_MODEL_SEEDS.map((seed) => ({ ...seed, active: DEFAULT_MODEL_ACTIVE[seed.id] ?? false })),
-  )
-  const [priorityBuckets, setPriorityBuckets] = useState<PriorityBuckets>({
-    high: ['gun', 'fire', 'unattended'],
-    medium: ['crash', 'crowd'],
-    low: ['helmet', 'speed', 'anpr'],
+  // cameras hydrate persisted non-blob video overrides (blob URLs die with the
+  // page session and are never persisted)
+  const [cameras, setCameras] = useState<Camera[]>(() => {
+    const overrides = loadCameraVideoUrls()
+    return CAMERAS.map((c) => {
+      const url = overrides[c.id]
+      if (!url) return c
+      return { ...c, videoUrl: url }
+    })
   })
-
-  // Alerts
-  const [alertModal, setAlertModal] = useState<AlertSnapshot | null>(null)
-  const alertModalRef = useRef<AlertSnapshot | null>(null)
-  const [toasts, setToasts] = useState<Toast[]>([])
-  const [soundEnabled, setSoundEnabled] = useState(true)
-  const pendingToasts = useRef<Map<string, number>>(new Map())
-  const pendingAlerts = useRef<Set<string>>(new Set())
-
-  const [incidentRows, setIncidentRows] = useState<IncidentLogRow[]>([])
-  const incidentRowsRef = useRef<IncidentLogRow[]>([])
-  const cameraRef = useRef<Camera[]>(initCameras())
-
-  const priorityOf = useCallback(
-    (modelId: string): Priority => {
-      if (priorityBuckets.high.includes(modelId)) return 'high'
-      if (priorityBuckets.medium.includes(modelId)) return 'medium'
-      return 'low'
-    },
-    [priorityBuckets],
+  const [severityOverrides, setSeverityOverrides] = useState<Record<string, Severity>>(
+    () => loadSeverityOverrides(),
   )
 
+  const [layout, setLayout] = useState<LayoutId>('focus')
+  const [order, setOrder] = useState<string[]>(DEFAULT_ORDER)
+  const [playing, setPlaying] = useState(true)
+  const [speed, setSpeed] = useState(1)
+
+  const [incidents, setIncidents] = useState<Incident[]>(() => loadIncidents())
+  const [toasts, setToasts] = useState<Toast[]>([])
+  const [criticalAlert, setCriticalAlert] = useState<Incident | null>(null)
+  const [soundEnabled, setSoundEnabled] = useState(true)
+  const [dispatchLog, setDispatchLog] = useState<DispatchEntry[]>([])
+
+  const [forensicCameraId, setForensicCameraId] = useState<string | null>(null)
+
+  const [reportPeriod, setReportPeriod] = useState<ReportPeriod>('today')
+  const [customRange, setCustomRange] = useState<{ from: number; to: number } | null>(null)
+
+  const canEdit = role === 'super-admin'
+
+  // ---- wall clock ---------------------------------------------------------
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(t)
+  }, [])
+
+  // ---- persistence --------------------------------------------------------
+  // Fix 2: incidents persist across reloads; in-memory flow stays live but
+  // every change is written through to localStorage.
+  useEffect(() => {
+    saveIncidents(incidents)
+  }, [incidents])
+
+  useEffect(() => {
+    saveSeverityOverrides(severityOverrides)
+  }, [severityOverrides])
+
+  // ---- helpers ------------------------------------------------------------
   const getCamera = useCallback(
-    (id: string | null): Camera | null => cameras.find((c) => c.id === id) ?? null,
+    (id: string | null) => cameras.find((c) => c.id === id),
     [cameras],
   )
 
-  const findPinByCamera = useCallback(
-    (cameraId: string): CameraPin | undefined => pins.find((p) => p.cameraId === cameraId),
-    [pins],
+  const severityOf = useCallback(
+    (modelId: string): Severity => {
+      if (severityOverrides[modelId]) return severityOverrides[modelId]
+      return AI_MODELS.find((m) => m.id === modelId)?.severity ?? 'low'
+    },
+    [severityOverrides],
   )
 
-  const canEditMaps = role === 'super-admin'
-  const canEditSettings = role === 'super-admin'
-  const canAssignModels = role === 'super-admin'
-  const canPlacePin = canEditMaps
-
-  // Keep refs in sync for the alert engine
-  useEffect(() => {
-    cameraRef.current = cameras
-  }, [cameras])
-
-  useEffect(() => {
-    incidentRowsRef.current = incidentRows
-    if (incidentRows.length > 0) return
-    const firedAt = new Date().toISOString().replace(/T/, ' ').slice(0, 19)
-    const rows = buildIncidentRows(cameraRef.current, `${firedAt}`)
-    setIncidentRows(rows)
-  }, [incidentRows])
-
-  // ---- Media --------------------------------------------------------------
-
-  const generateClip = useCallback(async (cameraId: string): Promise<Blob> => {
-    return createSyntheticClip(cameraId)
+  const setSeverity = useCallback((modelId: string, sev: Severity) => {
+    setSeverityOverrides((prev) => ({ ...prev, [modelId]: sev }))
   }, [])
 
-  const revokeCameras = useCallback(() => {
-    setCameras((prev) => {
-      prev.forEach((c) => {
-        if (c.videoUrl) URL.revokeObjectURL(c.videoUrl)
-      })
-      return prev
-    })
+  const models = useMemo<AiModel[]>(
+    () => AI_MODELS.map((m) => ({ ...m, severity: severityOverrides[m.id] ?? m.severity })),
+    [severityOverrides],
+  )
+
+  const setCameraVideo = useCallback((id: string, url: string) => {
+    setCameras((prev) =>
+      prev.map((c) =>
+        c.id === id
+          ? { ...c, videoUrl: url, customVideo: url.startsWith('blob:') }
+          : c,
+      ),
+    )
+    // only persist non-blob URLs (blob object URLs expire with the session)
+    if (!url.startsWith('blob:')) saveCameraVideoUrl(id, url)
   }, [])
 
-  const bootDemo = useCallback(async () => {
-    if (demoBusy) return
-    setDemoBusy(true)
-    const preview = document.createElement('video')
-    const ok = new Promise<boolean>((resolve) => {
-      preview.addEventListener(
-        'loadeddata',
-        () => {
-          const seekable = preview.seekable
-          if (seekable.length > 0) resolve(seekable.end(seekable.length - 1) >= 10)
-          else resolve(true)
-        },
-        { once: true },
-      )
-      preview.addEventListener(
-        'error',
-        () => resolve(false),
-        { once: true },
-      )
-    })
-    try {
-      const sample = await createSyntheticClip('CAM-01')
-      preview.src = URL.createObjectURL(sample)
-      await Promise.race([ok, new Promise((r) => setTimeout(r, 4000))])
-      URL.revokeObjectURL(preview.src)
-      if (!(await ok)) {
-        setDemoBusy(false)
-        return
-      }
-    } catch {
-      setDemoBusy(false)
-      return
-    }
+  const moveCamera = useCallback((id: string, x: number, y: number) => {
+    setCameras((prev) => prev.map((c) => (c.id === id ? { ...c, x, y } : c)))
+  }, [])
 
-    const seededCameras = initCameras()
-    const updates = await Promise.all(
-      CAMERA_SEEDS.map(async (seed, index) => {
-        const clip = await createSyntheticClip(seed.id)
-        const url = URL.createObjectURL(clip)
-        return {
-          ...seededCameras[index],
-          videoUrl: url,
-          fileName: `${seed.id}_demo_recording.webm`,
-        }
+  const updateCameraDetails = useCallback(
+    (id: string, patch: Partial<Pick<Camera, 'name' | 'ip'>>) => {
+      setCameras((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)))
+    },
+    [],
+  )
+
+  const setCameraModels = useCallback((id: string, modelIds: string[]) => {
+    setCameras((prev) => prev.map((c) => (c.id === id ? { ...c, models: modelIds } : c)))
+  }, [])
+
+  const toggleCameraModel = useCallback((id: string, modelId: string) => {
+    setCameras((prev) =>
+      prev.map((c) => {
+        if (c.id !== id) return c
+        const has = c.models.includes(modelId)
+        return { ...c, models: has ? c.models.filter((m) => m !== modelId) : [...c.models, modelId] }
       }),
     )
-    setCameras(updates)
-    const selected = ['CAM-01', 'CAM-02', 'CAM-03', 'CAM-05', 'CAM-06', 'CAM-08']
-    const assigned = new Map<number, string>()
-    selected.forEach((cid, i) => {
-      assigned.set(SEED_PARENT + i, cid)
-    })
-    setStreams((prev) => {
-      const next = prev.map((s) => {
-        const camId = assigned.get(s.slot) ?? s.cameraId
-        return { ...s, cameraId: camId }
-      })
+  }, [])
+
+  // ---- live wall ordering -------------------------------------------------
+  const mainId = order[0]
+
+  const focusCamera = useCallback((id: string) => {
+    setOrder((prev) => {
+      const idx = prev.indexOf(id)
+      if (idx <= 0) return prev
+      const next = [...prev]
+      // swap main (0) with clicked position
+      const tmp = next[0]
+      next[0] = next[idx]
+      next[idx] = tmp
       return next
     })
-    setIncidentRows([])
-    setMasterPlaying(true)
-    setDemoBusy(false)
-  }, [demoBusy])
-
-  // ---- Camera mutations ---------------------------------------------------
-
-  const updateCamera = useCallback((cameraId: string, patch: Partial<Camera>) => {
-    setCameras((prev) => prev.map((c) => (c.id === cameraId ? { ...c, ...patch } : c)))
   }, [])
 
-  const beginPlot = useCallback((x: number, y: number) => {
-    const camId = `CAM-${String(Math.floor(Math.random() * 880) + 11).padStart(2, '0')}`
-    setCameras((prev) =>
-      prev.some((c) => c.id === camId)
-        ? prev
-        : [
-            ...prev,
-            {
-              id: camId,
-              name: `Camera ${camId}`,
-              ip: `${DEFAULT_IP_PREFIX}.${camId.replace('CAM-', '')}`,
-              videoUrl: null,
-              fileName: null,
-              enabledModels: Object.keys(DEFAULT_MODEL_ACTIVE).filter((m) => DEFAULT_MODEL_ACTIVE[m]),
-              verifiedEvents: [],
-            },
-          ],
-    )
-    setDraftPin({ x, y, cameraId: camId, isNew: true })
-  }, [])
-
-  const savePin = useCallback(
-    (cameraId: string, x: number, y: number, isNew: boolean) => {
-      if (isNew) {
-        const existingCamera = cameras.find((c) => c.id === cameraId)
-        if (!existingCamera) {
-          const ipParts = cameraId.replace('CAM-', '')
-          setCameras((prev) => [
-            ...prev,
-            {
-              id: cameraId,
-              name: `Camera ${cameraId}`,
-              ip: `${DEFAULT_IP_PREFIX}.${ipParts}`,
-              videoUrl: null,
-              fileName: null,
-              enabledModels: Object.keys(DEFAULT_MODEL_ACTIVE).filter((m) => DEFAULT_MODEL_ACTIVE[m]),
-              verifiedEvents: [],
-            },
-          ])
-        }
-        setPins((prev) => [...prev, { id: `pin-${Date.now()}`, x, y, cameraId }])
-      } else {
-        setPins((prev) =>
-          prev.map((p) => (p.cameraId === cameraId ? { ...p, x, y } : p)),
-        )
+  /**
+   * Drag-and-drop tile swap: swaps the cameras at two display slots. Unlike
+   * focusCamera this works between any two slots and never remounts the video
+   * elements (tiles stay keyed by camera id).
+   */
+  const swapTiles = useCallback((fromIndex: number, toIndex: number) => {
+    setOrder((prev) => {
+      if (fromIndex === toIndex) return prev
+      if (fromIndex < 0 || toIndex < 0 || fromIndex >= prev.length || toIndex >= prev.length) {
+        return prev
       }
-      setDraftPin(null)
+      const next = [...prev]
+      ;[next[fromIndex], next[toIndex]] = [next[toIndex], next[fromIndex]]
+      return next
+    })
+  }, [])
+
+  // ---- forensic playback --------------------------------------------------
+  const openForensic = useCallback((id: string) => {
+    setForensicCameraId(id)
+  }, [])
+  const closeForensic = useCallback(() => {
+    setForensicCameraId(null)
+  }, [])
+
+  // ---- alert engine -------------------------------------------------------
+  // Fix 1: fire-once-per-session dedupe. Key = camId:modelId:time (no loop
+  // counter, no cooldown). Once an event fires it may never fire again during
+  // this session, no matter how many times the clip loops. The set is
+  // persisted so a page reload also doesn't re-fire old events. Reset
+  // Simulation (admin) clears it for a deliberate fresh run.
+  const firedKeysRef = useRef<Set<string> | null>(null)
+  if (firedKeysRef.current === null) {
+    // lazy init once — the fire-once set survives reloads via localStorage
+    firedKeysRef.current = new Set(loadFiredKeys())
+  }
+  // stable non-null reference captured for closures (TS can't narrow the ref)
+  const firedKeys = firedKeysRef.current
+
+  const camerasRef = useRef(cameras)
+  const severityRef = useRef(severityOf)
+  const playingRef = useRef(playing)
+  useEffect(() => {
+    camerasRef.current = cameras
+  }, [cameras])
+  useEffect(() => {
+    severityRef.current = severityOf
+  }, [severityOf])
+  useEffect(() => {
+    playingRef.current = playing
+  }, [playing])
+
+  const pushIncident = useCallback((inc: Incident) => {
+    setIncidents((prev) => [inc, ...prev].slice(0, 2000))
+  }, [])
+
+  const fireEvent = useCallback(
+    (cam: Camera, ev: Camera['events'][number]) => {
+      const sev = severityRef.current(ev.modelId)
+      const at = Date.now()
+      const clockLabel = new Date(at).toLocaleString('en-GB', { hour12: false })
+      const inc: Incident = {
+        id: `${cam.id}-${ev.modelId}-${at}`,
+        firedAt: at,
+        clockLabel,
+        cameraId: cam.id,
+        cameraIndex: cam.index,
+        cameraName: cam.name,
+        zone: cam.zone,
+        ip: cam.ip,
+        modelId: ev.modelId,
+        event: ev.title,
+        detail: ev.detail,
+        severity: sev,
+        confidence: ev.confidence,
+        plate: ev.plate,
+        vehicle: ev.vehicle,
+        speed: ev.speed,
+        acknowledged: false,
+        dispatched: false,
+      }
+      pushIncident(inc)
+
+      if (sev === 'high') {
+        setCriticalAlert((cur) => cur ?? inc)
+        // auto-float the offending camera to main stream
+        focusCamera(cam.id)
+      } else if (sev === 'medium') {
+        blip()
+        const toast: Toast = {
+          id: `t-${inc.id}`,
+          incidentId: inc.id,
+          title: inc.event,
+          detail: inc.detail,
+          cameraLabel: `CAM ${cam.index} · ${cam.zone}`,
+          severity: sev,
+        }
+        setToasts((prev) => [...prev.slice(-2), toast])
+        window.setTimeout(() => {
+          setToasts((prev) => prev.filter((t) => t.id !== toast.id))
+        }, 5000)
+      }
+      // low = silent log only
     },
-    [cameras],
+    [focusCamera, pushIncident],
   )
 
-  const deleteDraft = useCallback(() => setDraftPin(null), [])
-
-  const deletePin = useCallback(
-    (pinId: string) => {
-      setPins((prev) => {
-        const target = prev.find((p) => p.id === pinId)
-        if (target) {
-          const stillPinned = prev.some((p) => p.id !== pinId && p.cameraId === target.cameraId)
-          if (!stillPinned) {
-            const cam = cameraRef.current.find((c) => c.id === target.cameraId)
-            if (cam?.videoUrl) URL.revokeObjectURL(cam.videoUrl)
-            setCameras((cams) => cams.filter((c) => c.id !== target.cameraId))
-            setStreams((str) => str.map((s) => (s.cameraId === target.cameraId ? { ...s, cameraId: null } : s)))
-            setFocusedCameraId((f) => (f === target.cameraId ? null : f))
+  // Poll bound video elements and match against clip event times
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (!playingRef.current) return
+      const els = document.querySelectorAll<HTMLVideoElement>('video[data-cam]')
+      els.forEach((el) => {
+        const camId = el.getAttribute('data-cam')
+        if (!camId) return
+        const cam = camerasRef.current.find((c) => c.id === camId)
+        if (!cam) return
+        const ct = el.currentTime
+        for (const ev of cam.events) {
+          if (Math.abs(ct - ev.time) <= 0.35) {
+            const key = `${cam.id}:${ev.modelId}:${ev.time}`
+            if (firedKeys.has(key)) continue
+            firedKeys.add(key)
+            saveFiredKeys(Array.from(firedKeys))
+            fireEvent(cam, ev)
           }
         }
-        return prev.filter((p) => p.id !== pinId)
       })
-    },
-    [],
-  )
+    }, 250)
+    return () => window.clearInterval(interval)
+  }, [fireEvent])
 
-  // ---- Map image ----------------------------------------------------------
-
-  const uploadMapImage = useCallback((file: File) => {
-    const url = URL.createObjectURL(file)
-    setMapImageUrl((prev) => {
-      if (prev && prev !== '/society-map.svg') URL.revokeObjectURL(prev)
-      return url
-    })
-    setMapImageName(file.name)
-  }, [])
-
-  const restoreDefaultMap = useCallback(() => {
-    setMapImageUrl((prev) => {
-      if (prev && prev !== '/society-map.svg') URL.revokeObjectURL(prev)
-      return '/society-map.svg'
-    })
-    setMapImageName('society-map.svg (default)')
-  }, [])
-
-  // ---- Grid ---------------------------------------------------------------
-
-  const mountFileToSlot = useCallback(
-    (slot: number, file: File) => {
-      const url = URL.createObjectURL(file)
-      const camId = `CAM-${String(Math.floor(Math.random() * 88) + 11)}`
-      const newCamera: Camera = {
-        id: camId,
-        name: `${camId} — Local Stream`,
-        ip: `${DEFAULT_IP_PREFIX}.${Math.floor(Math.random() * 200) + 20}`,
-        videoUrl: url,
-        fileName: file.name,
-        enabledModels: Object.keys(DEFAULT_MODEL_ACTIVE).filter((m) => DEFAULT_MODEL_ACTIVE[m]),
-        verifiedEvents: [],
-      }
-      setCameras((prev) => [...prev, newCamera])
-      setStreams((prev) => prev.map((s) => (s.slot === slot ? { ...s, cameraId: camId } : s)))
-    },
-    [],
-  )
-
-  const unmountSlot = useCallback(
-    (slot: number) => {
-      setStreams((prev) => {
-        const target = prev.find((s) => s.slot === slot)
-        const camId = target?.cameraId ?? null
-        if (camId) {
-          const cam = cameraRef.current.find((c) => c.id === camId)
-          if (cam?.videoUrl && !camId.startsWith('CAM-')) URL.revokeObjectURL(cam.videoUrl)
-        }
-        return prev.map((s) => (s.slot === slot ? { ...s, cameraId: null } : s))
-      })
-    },
-    [],
-  )
-
-  const swapSlots = useCallback((a: number, b: number) => {
-    if (a === b) return
-    setStreams((prev) =>
-      prev.map((s) => {
-        if (s.slot === a) return { ...s, slot: b }
-        if (s.slot === b) return { ...s, slot: a }
-        return s
-      }),
-    )
-  }, [])
-
-  // ---- Forensics ----------------------------------------------------------
-
-  const openForensics = useCallback((cameraId: string) => {
-    setFocusedCameraId(cameraId)
-    setTab('forensics')
-  }, [])
-
-  const closeForensics = useCallback(() => {
-    setFocusedCameraId(null)
-    setTab('grid')
-  }, [])
-
-  const focusStream = useCallback((cameraId: string) => {
-    setTab('grid')
-    setFocusedCameraId(null)
-    setMasterPlaying(false)
-    window.setTimeout(() => {
-      setStreams((prev) => {
-        const target = prev.find((s) => s.cameraId === cameraId)
-        if (!target) return prev
-        const existing = prev.some((s) => s.slot === 0 && s.cameraId === cameraId)
-        if (existing) return prev
-        const swapTo = 0
-        // Bring the alert camera into slot 0 (swap with whatever is there)
-        return prev.map((s) => {
-          if (s.slot === target.slot) return { slot: s.slot, cameraId: prev[swapTo].cameraId }
-          if (s.slot === swapTo) return { slot: swapTo, cameraId }
-          return s
-        })
-      })
-      setMasterPlaying(true)
-    }, 60)
-  }, [])
-
-  // ---- Model editor -------------------------------------------------------
-
-  const toggleModel = useCallback((id: string) => {
-    setModels((prev) => prev.map((m) => (m.id === id ? { ...m, active: !m.active } : m)))
-  }, [])
-
-  const setEnabledForCamera = useCallback((cameraId: string, modelId: string, on: boolean) => {
-    setCameras((prev) =>
-      prev.map((c) => {
-        if (c.id !== cameraId) return c
-        const set = new Set(c.enabledModels)
-        if (on) set.add(modelId)
-        else set.delete(modelId)
-        return { ...c, enabledModels: [...set] }
-      }),
-    )
-  }, [])
-
-  const modelEditor = useMemo<ModelEditor>(
-    () => ({ models, toggle: toggleModel, setEnabledForCamera }),
-    [models, toggleModel, setEnabledForCamera],
-  )
-
-  // Set camera enabled models when the global model list changes
-  useEffect(() => {
-    setCameras((prev) =>
-      prev.map((c) => {
-        const next = new Set(c.enabledModels)
-        for (const m of models) {
-          if (!m.active) next.delete(m.id)
-        }
-        const changed = next.size !== c.enabledModels.length
-        return changed ? { ...c, enabledModels: [...next] } : c
-      }),
-    )
-  }, [models])
-
-  // ---- Alert engine -------------------------------------------------------
-
-  const fireToast = useCallback(
-    (marker: (typeof EVENT_MARKERS)[number], cam: Camera, firedAt: number) => {
-      const key = `${marker.id}:${cam.id}`
-      const last = pendingToasts.current.get(key)
-      if (last !== undefined && firedAt - last < 15_000) return
-      pendingToasts.current.set(key, firedAt)
-      const stamp = new Date(firedAt).toISOString().replace(/T/, ' ').slice(0, 19)
-      setIncidentRows((prev) => [
-        ...prev.filter((r) => !(r.id === marker.id && r.cameraId === cam.id)),
-        {
-          id: `${marker.id}@${cam.id}`,
-          severity: 'low',
-          timestamp: stamp,
-          cameraId: cam.id,
-          ip: cam.ip,
-          cameraName: cam.name,
-          event: marker.title,
-          modelId: marker.modelId,
-          confidence: marker.confidence,
-          plate: marker.plate,
-          vehicle: marker.vehicle,
-          fined: marker.fined,
-          time: marker.time,
-        },
-      ])
-      const toast: Toast = {
-        id: `${key}:${firedAt}:${Math.random().toString(36).slice(2, 6)}`,
-        markerId: marker.id,
-        cameraId: cam.id,
-        title: marker.title,
-        detail: marker.detail,
-        time: marker.time,
-        priority: marker.priority === 'medium' ? 'medium' : 'low',
-      }
-      setToasts((prev) => [...prev.slice(-3), toast])
-      // Auto-dismiss
-      window.setTimeout(() => {
-        setToasts((prev) => prev.filter((t) => t.id !== toast.id))
-      }, 8000)
-    },
-    [],
-  )
-
-  const fireHighAlert = useCallback(
-    (marker: (typeof EVENT_MARKERS)[number], cam: Camera, slot: number, parentId: number) => {
-      const key = `${marker.id}:${cam.id}`
-      if (pendingAlerts.current.has(key)) return
-      pendingAlerts.current.add(key)
-      const snap: AlertSnapshot = { parentId, slot, markerId: marker.id, cameraId: cam.id }
-      alertModalRef.current = snap
-      setAlertModal(snap)
-      setIncidentRows((prev) => [
-        ...prev.filter((r) => !(r.id === marker.id && r.cameraId === cam.id)),
-        {
-          id: `${marker.id}@${cam.id}`,
-          severity: 'high',
-          timestamp: new Date().toDateString(),
-          cameraId: cam.id,
-          ip: cam.ip,
-          cameraName: cam.name,
-          event: marker.title,
-          modelId: marker.modelId,
-          confidence: marker.confidence,
-          plate: marker.plate,
-          vehicle: marker.vehicle,
-          fined: marker.fined,
-          time: marker.time,
-        },
-      ])
-    },
-    [],
-  )
-
+  // ---- alert controls -----------------------------------------------------
   const acknowledgeAlert = useCallback(() => {
-    alertModalRef.current = null
-    setAlertModal(null)
+    setCriticalAlert((cur) => {
+      if (cur) {
+        setIncidents((prev) =>
+          prev.map((i) => (i.id === cur.id ? { ...i, acknowledged: true } : i)),
+        )
+      }
+      return null
+    })
     stopSiren()
+  }, [])
+
+  const dispatchAlert = useCallback((incident: Incident) => {
+    const msg = `🚨 PNS SafeCity ALERT\n${incident.event} — CAM ${incident.cameraIndex}\nZone: ${incident.zone}\nConfidence: ${incident.confidence}%\nTime: ${incident.clockLabel}\nAction required.`
+    const id = `d-${incident.id}-${Date.now()}`
+    const entry: DispatchEntry = {
+      id,
+      incidentId: incident.id,
+      channel: 'WhatsApp',
+      to: `${DUTY_OFFICER.name} (${DUTY_OFFICER.phone})`,
+      message: msg,
+      at: Date.now(),
+      status: 'sending',
+    }
+    setDispatchLog((prev) => [entry, ...prev].slice(0, 50))
+    setIncidents((prev) => prev.map((i) => (i.id === incident.id ? { ...i, dispatched: true } : i)))
+    window.setTimeout(() => {
+      setDispatchLog((prev) =>
+        prev.map((d) => (d.id === id ? { ...d, status: 'delivered' } : d)),
+      )
+    }, 1400)
   }, [])
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id))
   }, [])
 
-  // Master play state mirrored to video elements
-  const isMasterPlayingRef = useRef(isMasterPlaying)
-  useEffect(() => {
-    isMasterPlayingRef.current = isMasterPlaying
-  }, [isMasterPlaying])
+  /**
+   * Admin-only: clears the fire-once set (and the persisted incident log) so a
+   * fresh demo run can deliberately replay the full event sequence.
+   */
+  const resetSimulation = useCallback(() => {
+    firedKeysRef.current = new Set()
+    saveFiredKeys([])
+    setCriticalAlert(null)
+    setToasts([])
+    setIncidents([])
+    stopSiren()
+  }, [])
 
-  // Polling engine — checks bound video elements against the event timeline
+  // siren tied to critical alert
+  const soundRef = useRef(soundEnabled)
   useEffect(() => {
-    if (!isMasterPlaying) return
-    const interval = window.setInterval(() => {
-      const cams = cameraRef.current
-      const streamList = streams
-      for (const cam of cams) {
-        if (!cam.videoUrl) continue
-        const slot = streamList.find((s) => s.cameraId === cam.id)?.slot
-        const parentId = SEED_PARENT + (slot ?? 0)
-        for (const marker of EVENT_MARKERS) {
-          const videoEl: HTMLVideoElement | null = document.querySelector(
-            `video[data-slot-index="${parentId - SEED_PARENT}"]`,
-          )
-          if (!videoEl) continue
-          const ct = videoEl.currentTime
-          if (Math.abs(ct - marker.time) >= 0.03 && Math.abs(ct - marker.time) <= 0.5) {
-            const prio = priorityOf(marker.modelId)
-            if (prio === 'high') {
-              fireHighAlert(marker, cam, slot ?? 0, parentId)
-            } else if (prio === 'medium' || prio === 'low') {
-              fireToast(marker, cam, Date.now())
-            }
-          }
-        }
-      }
-    }, 220)
-    return () => window.clearInterval(interval)
-  }, [isMasterPlaying, streams, priorityOf, fireHighAlert, fireToast])
-
-  // Forensics raw seek monitor
-  useEffect(() => {
-    if (!focusedCameraId || tab !== 'forensics') return
-    const interval = window.setInterval(() => {
-      const vid = document.querySelector('video[data-forensics]') as HTMLVideoElement | null
-      if (!vid) return
-      const cam = cameraRef.current.find((c) => c.id === focusedCameraId)
-      if (!cam) return
-      const ct = vid.currentTime
-      for (const marker of EVENT_MARKERS) {
-        const prio = priorityOf(marker.modelId)
-        if (Math.abs(ct - marker.time) >= 0.03 && Math.abs(ct - marker.time) <= 0.5) {
-          if (prio === 'high') {
-            fireHighAlert(marker, cam, 0, SEED_PARENT + 9)
-          } else {
-            fireToast(marker, cam, Date.now())
-          }
-        }
-      }
-    }, 250)
-    return () => window.clearInterval(interval)
-  }, [focusedCameraId, tab, priorityOf, fireHighAlert, fireToast])
-
-  // Sound gate
-  const soundEnabledRef = useRef(soundEnabled)
-  useEffect(() => {
-    soundEnabledRef.current = soundEnabled
+    soundRef.current = soundEnabled
     if (!soundEnabled) stopSiren()
   }, [soundEnabled])
-
   useEffect(() => {
-    if (alertModal) {
-      if (soundEnabledRef.current) playSiren()
-    } else {
-      stopSiren()
-    }
-  }, [alertModal])
+    if (criticalAlert && soundRef.current) playSiren()
+    else stopSiren()
+  }, [criticalAlert])
 
-  const value = useMemo<AppStateValue>(
+  const value = useMemo<AppState>(
     () => ({
+      now,
       role,
       setRole,
-      canEditMaps,
-      canEditSettings,
-      canAssignModels,
-
+      canEdit,
       tab,
       setTab,
-      settingsOpen,
-      setSettingsOpen,
-      modelDrawerOpen,
-      setModelDrawerOpen,
-
+      cameras,
+      getCamera,
+      setCameraVideo,
+      moveCamera,
+      updateCameraDetails,
+      setCameraModels,
+      toggleCameraModel,
+      models,
+      severityOverrides,
+      setSeverity,
+      severityOf,
       layout,
       setLayout,
-      streams,
-      isMasterPlaying,
-      setMasterPlaying,
-      mountFileToSlot,
-      unmountSlot,
-      swapSlots,
-      bootDemo,
-      demoBusy,
-
-      cameras,
-      pins,
-      draftPin,
-      beginPlot,
-      savePin,
-      deleteDraft,
-      deletePin,
-      updateCamera,
-      mapImageUrl,
-      mapImageName,
-      uploadMapImage,
-      restoreDefaultMap,
-      getCamera,
-      findPinByCamera,
-      canPlacePin,
-
-      focusedCameraId,
-      openForensics,
-      closeForensics,
-      focusStream,
-      forensicSeek,
-      setForensicSeek,
-
-      modelEditor,
-      priorityBuckets,
-      setPriorityBuckets,
-      priorityOf,
-
-      alertModal,
-      acknowledgeAlert,
+      order,
+      focusCamera,
+      swapTiles,
+      mainId,
+      playing,
+      setPlaying,
+      speed,
+      setSpeed,
+      forensicCameraId,
+      openForensic,
+      closeForensic,
+      incidents,
       toasts,
       dismissToast,
+      criticalAlert,
+      acknowledgeAlert,
+      dispatchAlert,
       soundEnabled,
       setSoundEnabled,
-
-      incidentRows,
-
-      generateClip,
-      revokeCameras,
+      resetSimulation,
+      reportPeriod,
+      setReportPeriod,
+      customRange,
+      setCustomRange,
+      dispatchLog,
     }),
     [
-      role, tab, settingsOpen, modelDrawerOpen, layout, streams, isMasterPlaying,
-      demoBusy, cameras, pins, draftPin, mapImageUrl, mapImageName, canEditMaps,
-      canEditSettings, canAssignModels, canPlacePin, focusedCameraId, alertModal,
-      toasts, soundEnabled, incidentRows, priorityBuckets,
+      now, role, canEdit, tab, cameras, getCamera, setCameraVideo, moveCamera,
+      updateCameraDetails, setCameraModels, toggleCameraModel, models,
+      severityOverrides, setSeverity, severityOf, layout, order, focusCamera,
+      swapTiles, mainId, playing, speed, forensicCameraId, openForensic,
+      closeForensic, incidents, toasts, dismissToast, criticalAlert,
+      acknowledgeAlert, dispatchAlert, soundEnabled, resetSimulation, reportPeriod,
+      customRange, dispatchLog,
     ],
   )
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
 
-export function useApp(): AppStateValue {
+export function useApp(): AppState {
   const ctx = useContext(AppContext)
   if (!ctx) throw new Error('useApp must be used within AppProvider')
   return ctx
