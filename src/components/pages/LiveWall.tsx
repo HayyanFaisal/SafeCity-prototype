@@ -1,5 +1,6 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  Upload,
   Play,
   Pause,
   Zap,
@@ -7,25 +8,29 @@ import {
   Grid2X2,
   Maximize2,
   ScanLine,
+  LayoutDashboard,
+  Clock,
+  X,
+  Check,
+  MessageCircle,
+  ExternalLink,
 } from 'lucide-react'
 import { useApp } from '../../store/AppContext'
+import type { ActivityEntry } from '../../store/AppContext'
 import type { LayoutId } from '../../types'
+import { SEVERITY_META, DUTY_OFFICER } from '../../constants'
 import ModelBadge from '../ui/ModelBadge'
 import CriticalAlert from '../alerts/CriticalAlert'
 import ToastStack from '../alerts/ToastStack'
 import ForensicPanel from '../forensics/ForensicPanel'
 
-/**
- * Layout presets.
- *
- * Slot-fill rule (documented per rearchitecting prompt):
- * "Keep current primary + fill remaining slots by camera ID order."
+/* ── Layout presets ────────────────────────────────────────────────────────────
+ * Slot-fill rule: "Keep current primary + fill remaining slots by camera ID order."
  * `order` is the canonical display sequence (order[0] = primary). Switching
- * presets slices `order` to the preset's tile count, so playback of streams
- * that stay visible is never interrupted — the same camera ids keep their
- * same keyed <video> elements, they only change CSS grid placement.
+ * presets slices `order` to the preset's tile count; the same camera-keyed
+ * <video> elements keep playing across slot changes without remounting.
  *
- * focus  : 1 Main (60-70%) + right column of 3 + bottom row of 3  = 7 tiles
+ * focus  : 1 Main (60–70%) + right col of 3 + bottom row of 3 = 7 tiles
  * grid2x2: 2×2 = 4 tiles
  * grid3x3: 3×3 = 9 tiles
  * focus5 : 1 Main + 4 split = 5 tiles
@@ -36,11 +41,8 @@ const LAYOUTS: Record<
   {
     label: string
     count: number
-    /** tailwind classes applied to the grid container */
     container: string
-    /** size classes for the primary tile */
     main: string
-    /** size classes for secondary tiles */
     sub: string
   }
 > = {
@@ -68,9 +70,9 @@ const LAYOUTS: Record<
   focus5: {
     label: '1+4 Split',
     count: 5,
-    container: 'grid-cols-3 grid-rows-2',
+    container: 'grid-cols-3',
     main: 'col-span-2 row-span-2',
-    sub: 'col-span-1 row-span-1',
+    sub: 'col-span-1',
   },
   full: {
     label: 'Fullscreen',
@@ -81,6 +83,110 @@ const LAYOUTS: Record<
   },
 }
 
+/* ── Tile density ──────────────────────────────────────────────────────────── */
+type TileScale = 'compact' | 'normal' | 'large'
+const TILE_SCALE_OPTS: { value: TileScale; label: string }[] = [
+  { value: 'compact', label: 'Compact' },
+  { value: 'normal', label: 'Normal' },
+  { value: 'large', label: 'Large' },
+]
+const TILE_SCALE_STYLE: Record<TileScale, React.CSSProperties> = {
+  compact: { fontSize: '0.75rem' },
+  normal: {},
+  large: { fontSize: '1rem' },
+}
+const TILE_SCALE_GAP: Record<TileScale, string> = {
+  compact: 'gap-1',
+  normal: 'gap-3',
+  large: 'gap-4',
+}
+
+/* ── Helpers ───────────────────────────────────────────────────────────────── */
+function relTime(firedAt: number): string {
+  const diff = Math.floor((Date.now() - firedAt) / 1000)
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  return `${Math.floor(diff / 3600)}h ago`
+}
+
+function waLink(entry: ActivityEntry): string {
+  const label = entry.severity === 'medium' ? '⚠️ WARNING' : 'ℹ️ ADVISORY'
+  const msg = `${label} — Naval Anchorage SafeCity\n${entry.event}\nCAM ${entry.cameraIndex} · ${entry.zone}\n${new Date(entry.firedAt).toLocaleString('en-GB', { hour12: false })}`
+  return `https://wa.me/${DUTY_OFFICER.whatsapp}?text=${encodeURIComponent(msg)}`
+}
+
+/* ── Activity Feed entry ───────────────────────────────────────────────────── */
+function FeedEntry({
+  entry,
+  onDismiss,
+  onAcknowledge,
+}: {
+  entry: ActivityEntry
+  onDismiss: (id: string) => void
+  onAcknowledge: (id: string) => void
+}) {
+  const sev = SEVERITY_META[entry.severity]
+
+  return (
+    <div
+      className="animate-toast-in flex flex-col gap-1.5 rounded-lg border px-3 py-2 text-[11px] shadow-lg backdrop-blur-sm"
+      style={{ borderColor: `${sev.color}60`, backgroundColor: `${sev.color}12` }}
+    >
+      {/* Header row */}
+      <div className="flex items-start gap-2">
+        <div
+          className="mt-0.5 h-2 w-2 flex-shrink-0 rounded-full"
+          style={{ backgroundColor: sev.color }}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="font-bold leading-tight" style={{ color: sev.color }}>
+            {entry.event}
+          </div>
+          <div className="truncate text-slate-400">
+            CAM {entry.cameraIndex} · {entry.zone}
+          </div>
+          <div className="mt-0.5 flex items-center gap-1 text-slate-500">
+            <Clock className="h-2.5 w-2.5" />
+            {relTime(entry.firedAt)}
+          </div>
+        </div>
+        {/* Quick dismiss */}
+        <button
+          onClick={() => onDismiss(entry.id)}
+          className="flex-shrink-0 text-slate-600 hover:text-white transition"
+          title="Dismiss"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+
+      {/* Action row — WhatsApp + Acknowledge */}
+      <div className="flex items-center gap-1.5 border-t pt-1.5" style={{ borderColor: `${sev.color}30` }}>
+        <a
+          href={waLink(entry)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex flex-1 items-center justify-center gap-1 rounded border border-green-700/50 bg-green-900/30 px-2 py-0.5 text-[9px] font-semibold text-green-400 hover:bg-green-900/50 transition"
+          title="Notify duty officer via WhatsApp"
+        >
+          <MessageCircle className="h-2.5 w-2.5" />
+          WhatsApp
+          <ExternalLink className="h-2 w-2 opacity-60" />
+        </a>
+        <button
+          onClick={() => onAcknowledge(entry.id)}
+          className="flex flex-1 items-center justify-center gap-1 rounded border border-cyan/40 bg-cyan/10 px-2 py-0.5 text-[9px] font-semibold text-cyan hover:bg-cyan/20 transition"
+          title="Acknowledge this event"
+        >
+          <Check className="h-2.5 w-2.5" />
+          Acknowledge
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/* ── Main component ─────────────────────────────────────────────────────────── */
 export default function LiveWall() {
   const {
     cameras,
@@ -94,69 +200,96 @@ export default function LiveWall() {
     speed,
     setSpeed,
     openForensic,
+    closeForensic,        // ✅ BUG-1 FIX: was missing from destructuring
     forensicCameraId,
+    activityFeed,
+    dismissFeedEntry,
+    acknowledgeIncident,
+    mountCustomVideo,
   } = useApp()
 
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [dropTarget, setDropTarget] = useState<number | null>(null)
-  const [fullscreenId, setFullscreenId] = useState<string | null>(null)
+  const [tileScale, setTileScale] = useState<TileScale>('normal')
 
   const layoutDef = LAYOUTS[layout]
   const visibleIds = order.slice(0, layoutDef.count)
 
   const getCam = useCallback((id: string) => cameras.find((c) => c.id === id), [cameras])
 
-  /**
-   * Drag-and-drop swap (in addition to click-to-focus).
-   * HTML5 DnD: dragstart records the source slot index, dragover marks the
-   * hovered target, drop calls swapTiles(from, to). Videos are keyed by
-   * camera id so React moves them between slots without remounting.
-   */
+  /* ── A2 FIX: sync all video[data-cam] whenever playing/speed changes ─────── */
+  const playingRef = useRef(playing)
+  const speedRef = useRef(speed)
+  useEffect(() => { playingRef.current = playing }, [playing])
+  useEffect(() => { speedRef.current = speed }, [speed])
+
+  useEffect(() => {
+    const els = document.querySelectorAll<HTMLVideoElement>('video[data-cam]')
+    els.forEach((el) => {
+      el.playbackRate = speed
+      if (playing) {
+        if (el.paused) void el.play().catch(() => {})
+      } else {
+        if (!el.paused) el.pause()
+      }
+    })
+  }, [playing, speed])
+
+  /* ── Drag-and-drop swap ──────────────────────────────────────────────────── */
   const onDrop = (toIndex: number) => {
-    if (dragIndex !== null && dragIndex !== toIndex) {
-      swapTiles(dragIndex, toIndex)
-    }
+    if (dragIndex !== null && dragIndex !== toIndex) swapTiles(dragIndex, toIndex)
     setDragIndex(null)
     setDropTarget(null)
   }
 
+  /* ── Fullscreen ──────────────────────────────────────────────────────────── */
   const exitFullscreen = () => {
     if (document.fullscreenElement) void document.exitFullscreen()
-    setFullscreenId(null)
   }
 
-  const toggleFullscreen = (camId: string) => {
-    if (fullscreenId === camId) {
-      exitFullscreen()
-      return
-    }
-    setFullscreenId(camId)
-    // fallback: if the browser blocks fullscreen, we simply show a large
-    // focused tile instead — never crash.
-  }
+  /* ── A10 FIX: focus5 explicit row sizing so tiles don't clip ─────────────── */
+  const gridStyle: React.CSSProperties =
+    layout === 'focus5'
+      ? { gridTemplateRows: 'repeat(2, minmax(0, 1fr))' }
+      : {}
+
+  /* ── Acknowledge helper for feed entries ─────────────────────────────────── */
+  const handleAcknowledge = useCallback(
+    (feedId: string) => {
+      // Feed id format: "feed-{incidentId}"  — extract the incident id
+      const incidentId = feedId.replace(/^feed-/, '')
+      acknowledgeIncident(incidentId)
+      // dismissFeedEntry is called inside acknowledgeIncident via AppContext
+    },
+    [acknowledgeIncident],
+  )
+
+  const feedEntries = activityFeed.slice(0, 10)
 
   return (
     <main className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-hidden bg-base p-4">
-      {/* Toolbar */}
+
+      {/* ── Toolbar ── */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-edge/50 bg-surface2/60 px-4 py-3 backdrop-blur-sm">
         <div className="flex items-center gap-2">
+          {/* Play / Pause */}
           <button
             onClick={() => setPlaying(!playing)}
             className="btn-icon"
-            title={playing ? 'Pause all' : 'Play all'}
+            title={playing ? 'Pause all streams' : 'Resume all streams'}
           >
             {playing ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
           </button>
 
           <div className="h-6 w-px bg-edge2/50" />
 
+          {/* Speed */}
           <div className="flex items-center gap-2">
             <span className="text-xs text-slate-400 font-semibold">SPEED:</span>
             <select
               value={speed}
               onChange={(e) => setSpeed(parseFloat(e.target.value))}
               className="btn text-xs"
-              title="Playback speed (primary + forensic)"
             >
               <option value={1}>1×</option>
               <option value={2}>2×</option>
@@ -164,12 +297,24 @@ export default function LiveWall() {
           </div>
 
           <div className="h-6 w-px bg-edge2/50" />
-          <span className="hidden md:inline-flex items-center gap-1.5 rounded border border-cyan/40 bg-cyan/10 px-2 py-0.5 text-[10px] font-bold text-cyan">
-            <ScanLine className="h-3 w-3" />
-            DEMO MODE — streams + alerts are simulated
-          </span>
+
+          {/* Tile density */}
+          <div className="flex items-center gap-2">
+            <LayoutDashboard className="h-3.5 w-3.5 text-slate-400" />
+            <select
+              value={tileScale}
+              onChange={(e) => setTileScale(e.target.value as TileScale)}
+              className="btn text-xs"
+              title="Tile display density"
+            >
+              {TILE_SCALE_OPTS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
+        {/* Layout presets */}
         <div className="flex flex-wrap items-center gap-2">
           {(Object.keys(LAYOUTS) as LayoutId[]).map((id) => {
             const def = LAYOUTS[id]
@@ -191,10 +336,10 @@ export default function LiveWall() {
         </div>
       </div>
 
-      {/* Grid */}
+      {/* ── Video grid ── */}
       <div
-        className={`grid min-h-0 flex-1 gap-3 ${layoutDef.container}`}
-        style={{ gridTemplateColumns: undefined }}
+        className={`grid min-h-0 flex-1 ${TILE_SCALE_GAP[tileScale]} ${layoutDef.container}`}
+        style={{ ...gridStyle, ...TILE_SCALE_STYLE[tileScale] }}
       >
         {visibleIds.map((camId, idx) => {
           const cam = getCam(camId)
@@ -226,7 +371,9 @@ export default function LiveWall() {
                 setDragIndex(null)
                 setDropTarget(null)
               }}
-              onClick={() => focusCamera(camId)}
+              onClick={() => {
+                if (!isMain) focusCamera(camId)
+              }}
               className={`group relative flex flex-col overflow-hidden rounded-lg border bg-base shadow-lg transition ${
                 isMain ? layoutDef.main : layoutDef.sub
               } ${
@@ -234,11 +381,12 @@ export default function LiveWall() {
                   ? 'border-cyan/70 opacity-60'
                   : isDropTarget
                     ? 'border-gold/70 ring-2 ring-gold/40'
-                    : 'border-edge/60 hover:border-gold/50'
-              } cursor-pointer`}
-              title="Click to focus · Drag to another tile to swap"
+                    : isMain
+                      ? 'border-gold/40'
+                      : 'border-edge/60 hover:border-gold/50'
+              } ${isMain ? 'cursor-default' : 'cursor-pointer'}`}
             >
-              {/* Video — keyed by camera id so swaps never remount/restart it */}
+              {/* Video — keyed by camera id so swaps never remount */}
               <video
                 key={`video-${camId}`}
                 data-cam={camId}
@@ -250,8 +398,9 @@ export default function LiveWall() {
                 playsInline
                 ref={(el) => {
                   if (el) {
-                    el.playbackRate = speed
-                    if (playing && el.paused) void el.play().catch(() => {})
+                    el.playbackRate = speedRef.current
+                    if (playingRef.current && el.paused) void el.play().catch(() => {})
+                    if (!playingRef.current && !el.paused) el.pause()
                   }
                 }}
               />
@@ -261,6 +410,7 @@ export default function LiveWall() {
 
               {/* HUD */}
               <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-2">
+                {/* Top row: badge + REC */}
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex flex-col gap-1">
                     <div className="hud-label text-xs font-bold text-gold-soft drop-shadow-lg">
@@ -268,16 +418,24 @@ export default function LiveWall() {
                     </div>
                     <div className="text-[10px] text-slate-300 drop-shadow-md">{cam.zone}</div>
                   </div>
-                  <div className="flex items-center gap-0.5 rounded bg-danger/80 px-2 py-0.5 animate-live-blink">
-                    <div className="h-1.5 w-1.5 rounded-full bg-white" />
-                    <span className="text-[10px] font-bold text-white">REC</span>
+                  <div className="flex items-center gap-1.5">
+                    {cam.customVideo && (
+                      <span className="rounded bg-cyan/80 px-1.5 py-0.5 text-[9px] font-bold text-slate-950 font-mono">
+                        CUSTOM MP4
+                      </span>
+                    )}
+                    <div className="flex items-center gap-0.5 rounded bg-danger/80 px-2 py-0.5 animate-live-blink">
+                      <div className="h-1.5 w-1.5 rounded-full bg-white" />
+                      <span className="text-[10px] font-bold text-white">REC</span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Active AI model badges — one glowing tag per active model */}
+                {/* Bottom row: controls (main only) + model badges */}
                 <div className="flex flex-col items-end gap-1">
+                  {/* A3 FIX: Controls only on main tile — not blocked by hover overlay */}
                   {isMain && (
-                    <div className="mb-1 flex items-center gap-1">
+                    <div className="pointer-events-auto mb-1 flex items-center gap-1">
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
@@ -305,13 +463,30 @@ export default function LiveWall() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
-                          toggleFullscreen(camId)
+                          exitFullscreen()
                         }}
                         className="rounded border border-edge2/70 bg-surface/80 p-1 text-slate-200 hover:border-cyan/60 hover:text-cyan"
-                        title="Fullscreen"
+                        title="Exit fullscreen"
                       >
                         <Maximize2 className="h-3.5 w-3.5" />
                       </button>
+                      {/* Mount Custom Video Button on Tile */}
+                      <label
+                        className="cursor-pointer rounded border border-edge2/70 bg-surface/80 p-1 text-slate-200 hover:border-cyan hover:text-cyan"
+                        title="Mount Custom .mp4 Video on this Tile"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Upload className="h-3.5 w-3.5" />
+                        <input
+                          type="file"
+                          accept="video/mp4,video/webm"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0]
+                            if (file) mountCustomVideo(camId, file)
+                          }}
+                        />
+                      </label>
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
@@ -334,12 +509,10 @@ export default function LiveWall() {
                 </div>
               </div>
 
-              {/* Hover hint */}
-              <div className="pointer-events-none absolute inset-0 hidden items-center justify-center bg-black/40 backdrop-blur-sm group-hover:flex">
-                <span className="rounded bg-surface/80 px-2 py-1 text-[10px] font-semibold text-gold-soft">
-                  Click to focus · Drag to swap
-                </span>
-              </div>
+              {/* A3/A9 FIX: Hover overlay only on side tiles — subtle dim, no text */}
+              {!isMain && (
+                <div className="pointer-events-none absolute inset-0 hidden items-center justify-center bg-black/35 backdrop-blur-[1px] group-hover:flex" />
+              )}
 
               {isDropTarget && (
                 <div className="pointer-events-none absolute inset-0 border-2 border-dashed border-gold/70 bg-gold/5" />
@@ -349,10 +522,42 @@ export default function LiveWall() {
         })}
       </div>
 
-      {/* Forensic inspection overlay */}
+      {/* ── Forensic inspection overlay ──────────────────────────────────────── */}
       {forensicCameraId && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-          <ForensicPanel cameraId={forensicCameraId} onClose={() => exitFullscreen()} />
+          {/*
+           * BUG-1 FIX: onClose was calling exitFullscreen() (browser Fullscreen
+           * API) which never cleared forensicCameraId — panel was un-closeable.
+           * Now correctly calls closeForensic() from AppContext, which sets
+           * forensicCameraId to null and dismisses the overlay.
+           */}
+          <ForensicPanel cameraId={forensicCameraId} onClose={closeForensic} />
+        </div>
+      )}
+
+      {/* ── Activity feed (non-critical events) — bottom-right ──────────────── */}
+      {feedEntries.length > 0 && (
+        <div className="pointer-events-auto fixed bottom-4 right-4 z-30 flex w-72 flex-col gap-1.5">
+          <div className="mb-0.5 flex items-center justify-between">
+            <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">
+              Activity Feed
+            </span>
+            <button
+              onClick={() => feedEntries.forEach((e) => dismissFeedEntry(e.id))}
+              className="text-[9px] text-slate-600 hover:text-slate-400 transition"
+              title="Clear all"
+            >
+              Clear all
+            </button>
+          </div>
+          {feedEntries.map((entry) => (
+            <FeedEntry
+              key={entry.id}
+              entry={entry}
+              onDismiss={dismissFeedEntry}
+              onAcknowledge={handleAcknowledge}
+            />
+          ))}
         </div>
       )}
 

@@ -1,39 +1,40 @@
 import {
   Flame,
-  Crosshair,
   ShieldAlert,
   Car,
   ScanLine,
   Users,
   Gauge,
   Bike,
-  Baby,
   AlertTriangle,
+  ArrowDownCircle,
+  Clock,
+  Route,
+  Compass,
 } from 'lucide-react'
 import type { ModelCategory } from '../../types'
 import { AI_MODELS } from '../../constants'
 
 const ICONS: Record<string, typeof Flame> = {
-  weapon: Crosshair,
+  helmet: Bike,
+  anpr: ScanLine,
+  wrongway: Car,
+  speed: Gauge,
+  parking: Clock,
+  falling: ArrowDownCircle,
+  mob: Users,
+  wallbreach: ShieldAlert,
   fire: Flame,
   accident: AlertTriangle,
-  abandoned: ShieldAlert,
-  anpr: ScanLine,
-  speed: Gauge,
-  wrongway: Car,
-  underage: Baby,
-  fight: Users,
-  helmet: Bike,
+  track_person: Route,
+  track_vehicle: Compass,
 }
 
 const COLOR: Record<ModelCategory, string> = {
-  weapon: 'border-danger/50 bg-danger/10 text-danger',
-  fire: 'border-danger/50 bg-danger/10 text-danger',
-  accident: 'border-danger/50 bg-danger/10 text-danger',
-  safety: 'border-gold/50 bg-gold/10 text-gold-soft',
-  anpr: 'border-cyan/50 bg-cyan/10 text-cyan',
-  traffic: 'border-warn/50 bg-warn/10 text-warn',
-  person: 'border-steel/60 bg-steel/10 text-steel',
+  traffic: 'border-cyan-500/50 bg-cyan-500/10 text-cyan',
+  behaviour: 'border-amber-500/50 bg-amber-500/10 text-amber-400',
+  safety: 'border-rose-500/50 bg-rose-500/10 text-rose-400',
+  tracking: 'border-purple-500/50 bg-purple-500/10 text-purple-400',
 }
 
 export function modelName(id: string) {

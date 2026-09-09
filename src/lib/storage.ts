@@ -28,10 +28,25 @@ export function saveJSON(key: string, value: unknown): void {
 
 export function loadIncidents(): Incident[] {
   const list = loadJSON<Incident[]>(STORAGE_KEYS.incidents, [])
+  if (!Array.isArray(list)) return []
   // sanity: only accept well-formed records
-  return Array.isArray(list)
-    ? list.filter((i) => i && typeof i.firedAt === 'number' && typeof i.cameraId === 'string')
-    : []
+  const valid = list.filter(
+    (i) => i && typeof i.firedAt === 'number' && typeof i.cameraId === 'string',
+  )
+  // item 9: single source of truth — drop duplicate rows by id AND by the
+  // natural key (cameraId + modelId + firedAt) to clean up legacy dupes.
+  const seenIds = new Set<string>()
+  const seenKeys = new Set<string>()
+  const deduped: Incident[] = []
+  for (const inc of valid) {
+    if (seenIds.has(inc.id)) continue
+    seenIds.add(inc.id)
+    const natural = `${inc.cameraId}:${inc.modelId}:${inc.firedAt}`
+    if (seenKeys.has(natural)) continue
+    seenKeys.add(natural)
+    deduped.push(inc)
+  }
+  return deduped
 }
 
 export function saveIncidents(incidents: Incident[]): void {
@@ -95,6 +110,35 @@ export function saveMapImage(dataUrl: string | null): void {
   } catch {
     // ignore quota errors — map image simply won't persist across reloads
   }
+}
+
+/* ── Camera CRUD persistence (Camera Management page) ──────────────────────── */
+
+/**
+ * Load the persisted camera catalogue (full Camera[] state incl. positions).
+ * Returns `null` when never saved (fall back to built-in defaults); an empty
+ * array is valid — the admin may have deleted every camera.
+ */
+export function loadCameraCatalogue(): Camera[] | null {
+  const raw = localStorage.getItem(STORAGE_KEYS.cameras)
+  if (!raw) return null
+  const list = loadJSON<Camera[]>(STORAGE_KEYS.cameras, [])
+  if (!Array.isArray(list)) return null
+  return list.filter((c) => c && typeof c.id === 'string' && typeof c.index === 'number')
+}
+
+export function saveCameraCatalogue(cameras: Camera[]): void {
+  saveJSON(STORAGE_KEYS.cameras, cameras)
+}
+
+/** Next sequential CAM number for newly added cameras (monotonic counter). */
+export function loadCameraSequence(): number {
+  const n = loadJSON<number>(STORAGE_KEYS.cameraSequence, 8)
+  return typeof n === 'number' && Number.isFinite(n) ? n : 8
+}
+
+export function saveCameraSequence(seq: number): void {
+  saveJSON(STORAGE_KEYS.cameraSequence, seq)
 }
 
 /** Convenience for camera pin round-tripping. */

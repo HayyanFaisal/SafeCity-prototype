@@ -37,6 +37,11 @@ export function rangeFor(period: ReportPeriod, now: number, custom?: { from: num
       const start = new Date(d.getFullYear(), d.getMonth(), 1).getTime()
       return { label: 'This Month', start, end }
     }
+    case 'year': {
+      const d = new Date(now)
+      const start = new Date(d.getFullYear(), 0, 1).getTime()
+      return { label: 'This Year', start, end }
+    }
     case 'custom':
       return {
         label: 'Custom Range',

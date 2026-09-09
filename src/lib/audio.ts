@@ -13,6 +13,18 @@ function ensureCtx(): AudioContext {
   return ctx
 }
 
+/**
+ * A6 FIX: Resume the AudioContext on the very first user gesture so that the
+ * siren is never silently blocked by the browser's autoplay policy. Call this
+ * from a global click/keydown listener in the app root.
+ */
+export function unlockAudio(): void {
+  const c = ensureCtx()
+  if (c.state === 'suspended') {
+    c.resume().catch(() => {/* noop */})
+  }
+}
+
 export function playSiren() {
   const c = ensureCtx()
   if (c.state === 'suspended') c.resume()

@@ -1,10 +1,11 @@
-import { X, Phone, MessageCircle, ExternalLink, Focus } from 'lucide-react'
+import { X, MessageCircle, ExternalLink, Focus } from 'lucide-react'
 import { useApp } from '../../store/AppContext'
 import { DUTY_OFFICER, SEVERITY_META } from '../../constants'
+import { blip } from '../../lib/audio'
 import ModelBadge from '../ui/ModelBadge'
 
 export default function CriticalAlert() {
-  const { criticalAlert, acknowledgeAlert, dispatchAlert, canEdit, focusCamera } = useApp()
+  const { criticalAlert, acknowledgeAlert, canEdit, focusCamera } = useApp()
 
   if (!criticalAlert) return null
 
@@ -41,11 +42,6 @@ export default function CriticalAlert() {
 
         {/* Content */}
         <div className="space-y-4 px-6 py-5">
-          {/* Mock integration tag */}
-          <div className="rounded border border-cyan/30 bg-cyan/5 px-3 py-1.5 text-center text-[10px] font-semibold text-cyan">
-            DEMO MODE — siren, push notification & dispatch are simulated
-          </div>
-
           {/* Event title + detail */}
           <div>
             <h2 className="text-xl font-bold text-white mb-2">{criticalAlert.event}</h2>
@@ -79,36 +75,23 @@ export default function CriticalAlert() {
             <ModelBadge id={criticalAlert.modelId} />
           </div>
 
-          {/* Dispatch actions */}
+          {/* WhatsApp quick-notify (real deep-link) */}
           {canEdit && (
-            <div className="space-y-2 border-t border-edge/50 pt-4">
-              <p className="text-xs text-slate-400 font-semibold">DISPATCH OPTIONS (DEMO):</p>
-              <div className="grid grid-cols-2 gap-2">
-                {/* WhatsApp deep-link (real) — Muhammad Ammar +92 349 4533107 */}
-                <a
-                  href={`https://wa.me/${DUTY_OFFICER.whatsapp}?text=${encodeURIComponent(
-                    `🚨 PNS SafeCity ALERT\n${criticalAlert.event} — CAM ${criticalAlert.cameraIndex}\nZone: ${criticalAlert.zone}\nTime: ${criticalAlert.clockLabel}`,
-                  )}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn text-xs flex items-center justify-center gap-2 bg-green-900/40 border-green-700/60 text-green-300 hover:bg-green-900/60"
-                  title="Open WhatsApp with pre-filled message"
-                >
-                  <MessageCircle className="h-4 w-4" />
-                  WhatsApp
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-
-                {/* Simulated call dispatch */}
-                <button
-                  onClick={() => dispatchAlert(criticalAlert)}
-                  className="btn text-xs flex items-center justify-center gap-2 bg-blue-900/40 border-blue-700/60 text-blue-300 hover:bg-blue-900/60"
-                  title="Simulated call/wSMS dispatch (logs a mock payload)"
-                >
-                  <Phone className="h-4 w-4" />
-                  Dispatch
-                </button>
-              </div>
+            <div className="border-t border-edge/50 pt-3">
+              <a
+                href={`https://wa.me/${DUTY_OFFICER.whatsapp}?text=${encodeURIComponent(
+                  `🚨 Naval Anchorage SafeCity ALERT\n${criticalAlert.event} — CAM ${criticalAlert.cameraIndex}\nZone: ${criticalAlert.zone}\nTime: ${criticalAlert.clockLabel}`,
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => blip()}
+                className="btn w-full text-xs flex items-center justify-center gap-2 bg-green-900/40 border-green-700/60 text-green-300 hover:bg-green-900/60"
+                title={`Notify ${DUTY_OFFICER.name} via WhatsApp`}
+              >
+                <MessageCircle className="h-4 w-4" />
+                Notify {DUTY_OFFICER.name} via WhatsApp
+                <ExternalLink className="h-3 w-3" />
+              </a>
             </div>
           )}
         </div>

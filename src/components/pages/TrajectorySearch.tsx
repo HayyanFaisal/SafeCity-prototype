@@ -10,7 +10,7 @@ import ModelBadge from '../ui/ModelBadge'
  * returns the chronological route of matching detections across camera nodes.
  */
 export default function TrajectorySearch() {
-  const { incidents, openForensic, setTab } = useApp()
+  const { incidents, openForensic } = useApp()
   const [query, setQuery] = useState('')
   const [submitted, setSubmitted] = useState('')
 
@@ -92,10 +92,7 @@ export default function TrajectorySearch() {
               {route.map((inc, idx) => (
                 <div key={inc.id} className="flex items-center gap-2">
                   <button
-                    onClick={() => {
-                      setTab('wall')
-                      openForensic(inc.cameraId)
-                    }}
+                    onClick={() => openForensic(inc.cameraId)}
                     className="fade-up rounded-lg border border-cyan/40 bg-cyan/10 px-3 py-2 text-left transition hover:bg-cyan/20"
                     style={{ animationDelay: `${idx * 80}ms` }}
                     title="Open forensic playback for this camera"

@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 import { Download, Mail, Calendar, X, Send } from 'lucide-react'
 import { useApp } from '../../store/AppContext'
 import { SEVERITY_META, AI_MODELS } from '../../constants'
-import { filterByRange, rangeFor, formatRangeLabel } from '../../lib/reportPeriod'
+import { filterByRange, rangeFor, formatRangeLabel, startOfDay } from '../../lib/reportPeriod'
+import { buildSeedIncidents } from '../../lib/seedAnalytics'
 import type { ReportPeriod } from '../../types'
 import {
   LineChart,
@@ -26,6 +27,7 @@ const PERIOD_OPTIONS: Array<{ id: ReportPeriod; label: string }> = [
   { id: 'today', label: 'Today' },
   { id: 'week', label: 'This Week' },
   { id: 'month', label: 'This Month' },
+  { id: 'year', label: 'This Year' },
   { id: 'all', label: 'All Time' },
 ]
 
@@ -42,8 +44,52 @@ function EmptyPeriod({ rangeLabel }: { rangeLabel: string }) {
   )
 }
 
+/** Build the timeline buckets appropriate for the selected period span. */
+function timelineFor(
+  filtered: Array<{ firedAt: number }>,
+  range: { start: number; end: number },
+): Array<{ time: string; events: number }> {
+  const spanMs = range.end - range.start
+  // < 2 days → hourly; < 45 days → daily; else monthly
+  if (spanMs < 2 * 24 * 3600_000) {
+    return Array.from({ length: 24 }, (_, i) => ({
+      time: `${String(i).padStart(2, '0')}:00`,
+      events: filtered.filter((inc) => new Date(inc.firedAt).getHours() === i).length,
+    }))
+  }
+  if (spanMs < 45 * 24 * 3600_000) {
+    const days = Math.min(40, Math.max(2, Math.round(spanMs / (24 * 3600_000))))
+    return Array.from({ length: days }, (_, i) => {
+      const dayStart = range.end - (days - i) * 24 * 3600_000
+      const dayEnd = dayStart + 24 * 3600_000
+      return {
+        time: new Date(dayStart).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+        events: filtered.filter((inc) => inc.firedAt >= dayStart && inc.firedAt < dayEnd).length,
+      }
+    })
+  }
+  // monthly
+  const buckets: Array<{ time: string; events: number }> = []
+  const startYear = new Date(range.start).getFullYear()
+  const endYear = new Date(Math.min(range.end - 1, Date.now())).getFullYear()
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  for (let y = startYear; y <= endYear; y++) {
+    const mStart = y === startYear ? new Date(range.start).getMonth() : 0
+    const mEnd = y === endYear ? new Date(Math.min(range.end - 1, Date.now())).getMonth() : 11
+    for (let m = mStart; m <= mEnd; m++) {
+      const from = new Date(y, m, 1).getTime()
+      const to = new Date(y, m + 1, 1).getTime()
+      buckets.push({
+        time: `${months[m]} ${String(y).slice(2)}`,
+        events: filtered.filter((inc) => inc.firedAt >= from && inc.firedAt < to).length,
+      })
+    }
+  }
+  return buckets
+}
+
 export default function AnalyticsPage() {
-  const { incidents, now, canEdit, reportPeriod, setReportPeriod, customRange, setCustomRange } =
+  const { incidents, cameras, now, canEdit, reportPeriod, setReportPeriod, customRange, setCustomRange } =
     useApp()
 
   // ---- period filtering (Fix 2) ----
@@ -51,8 +97,30 @@ export default function AnalyticsPage() {
     () => rangeFor(reportPeriod, now, customRange ?? undefined),
     [reportPeriod, now, customRange],
   )
-  const filtered = useMemo(() => filterByRange(incidents, range), [incidents, range])
   const rangeLabel = formatRangeLabel(range)
+
+  // ---- warehouse dataset: seeded historical + live session (item 1) ----
+  // Regenerate the seed history once per day (anchored to start-of-day) so it
+  // is deterministic and cheap while `now` ticks every second.
+  const dayAnchor = startOfDay(new Date(now))
+  const seedIncidents = useMemo(
+    () => buildSeedIncidents(dayAnchor, cameras),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dayAnchor, cameras],
+  )
+  const warehouse = useMemo(() => {
+    const seen = new Set<string>()
+    const merged: typeof incidents = []
+    // Seed first (they are the older history), then live on top.
+    for (const inc of [...seedIncidents, ...incidents]) {
+      if (seen.has(inc.id)) continue
+      seen.add(inc.id)
+      merged.push(inc)
+    }
+    return merged.sort((a, b) => b.firedAt - a.firedAt)
+  }, [seedIncidents, incidents])
+
+  const filtered = useMemo(() => filterByRange(warehouse, range), [warehouse, range])
 
   const [emailOpen, setEmailOpen] = useState(false)
   const [emailTo, setEmailTo] = useState('')
@@ -103,14 +171,7 @@ export default function AnalyticsPage() {
       .slice(0, 8)
   }, [filtered])
 
-  const timelineData = useMemo(
-    () =>
-      Array.from({ length: 24 }, (_, i) => ({
-        time: `${String(i).padStart(2, '0')}:00`,
-        events: filtered.filter((inc) => new Date(inc.firedAt).getHours() === i).length,
-      })),
-    [filtered],
-  )
+  const timelineData = useMemo(() => timelineFor(filtered, range), [filtered, range])
 
   const heatmap = useMemo(() => {
     const grid: Array<{ day: string; hours: number[] }> = []
@@ -125,31 +186,37 @@ export default function AnalyticsPage() {
   }, [filtered])
   const heatMax = Math.max(1, ...heatmap.flatMap((d) => d.hours))
 
-  // ---- PDF export (Fix 3) ----
+  // ---- PDF export (item 3: high-contrast, readable) ----
   const generatePDF = () => {
     const doc = new jsPDF()
     const pageWidth = doc.internal.pageSize.getWidth()
 
-    // Header
+    // Dark text on white — maximum legibility when printed or viewed.
+    const INK: [number, number, number] = [15, 23, 42] // near-black navy
+    const GRAY: [number, number, number] = [71, 85, 105] // slate-600 body text
+    const ACCENT: [number, number, number] = [139, 108, 25] // deep gold (legible on white)
+
+    // Header — white page, dark title
+    doc.setFillColor(15, 23, 42)
+    doc.rect(0, 0, pageWidth, 40, 'F')
+    doc.setTextColor(255, 255, 255)
     doc.setFontSize(16)
-    doc.setTextColor(201, 162, 39)
     doc.text('PNS SafeCity — Incident Report', pageWidth / 2, 18, { align: 'center' })
     doc.setFontSize(10)
-    doc.setTextColor(150, 150, 150)
+    doc.setTextColor(226, 232, 240)
     doc.text(`Generated: ${new Date(now).toLocaleString('en-GB')}`, pageWidth / 2, 25, {
       align: 'center',
     })
-    // Fix 3: print the exact date range covered
     doc.setFontSize(11)
-    doc.setTextColor(34, 211, 238)
+    doc.setTextColor(201, 162, 39)
     doc.text(`Report Period: ${rangeLabel}`, pageWidth / 2, 33, { align: 'center' })
 
-    // Summary from the FILTERED set
-    let yPos = 44
+    // Summary — dark text on light table
+    let yPos = 52
     doc.setFontSize(12)
-    doc.setTextColor(201, 162, 39)
+    doc.setTextColor(...ACCENT)
     doc.text('SUMMARY', 20, yPos)
-    yPos += 9
+    yPos += 8
     autoTable(doc, {
       startY: yPos,
       head: [['Metric', 'Count']],
@@ -159,27 +226,27 @@ export default function AnalyticsPage() {
         ['Warnings', String(mediumCount)],
         ['Advisory', String(lowCount)],
       ],
-      theme: 'striped',
-      styles: { fillColor: [20, 35, 64], textColor: [226, 232, 240] },
-      headStyles: { fillColor: [201, 162, 39], textColor: [5, 11, 24] },
+      theme: 'grid',
+      styles: { fillColor: [255, 255, 255], textColor: INK, lineColor: [203, 213, 225] },
+      headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255] },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
       margin: { left: 20, right: 20 },
     })
     yPos = (doc as any).lastAutoTable.finalY + 14
 
     if (filtered.length === 0) {
-      // Fix 3: honest empty report, not a broken table
       doc.setFontSize(12)
-      doc.setTextColor(150, 150, 150)
+      doc.setTextColor(...GRAY)
       doc.text('No incidents recorded for the selected period.', 20, yPos)
       doc.save(`safecity-report-${new Date().toISOString().split('T')[0]}.pdf`)
       return
     }
 
+    // Incidents — dark text on light striped table, paginated by autotable
     doc.setFontSize(12)
-    doc.setTextColor(201, 162, 39)
+    doc.setTextColor(...ACCENT)
     doc.text('INCIDENTS', 20, yPos)
     yPos += 8
-    // Fix 3: include ALL matching incidents — jspdf-autotable paginates
     const tableData = filtered.map((inc) => [
       new Date(inc.firedAt).toLocaleString('en-GB', { hour12: false }),
       `CAM ${inc.cameraIndex} — ${inc.cameraName}`,
@@ -192,10 +259,10 @@ export default function AnalyticsPage() {
       startY: yPos,
       head: [['Time', 'Camera', 'Zone', 'Event', 'Severity', 'Confidence']],
       body: tableData,
-      theme: 'striped',
-      styles: { fontSize: 8, textColor: [226, 232, 240], cellPadding: 2 },
-      headStyles: { fillColor: [201, 162, 39], textColor: [5, 11, 24] },
-      alternateRowStyles: { fillColor: [15, 31, 56] },
+      theme: 'grid',
+      styles: { fontSize: 8, textColor: INK, cellPadding: 2, lineColor: [203, 213, 225] },
+      headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255] },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
       margin: { left: 20, right: 20 },
     })
 
@@ -203,8 +270,6 @@ export default function AnalyticsPage() {
   }
 
   const sendEmail = () => {
-    // MOCK email dispatch — no real SMTP is configured; we log the payload and
-    // show a success toast so evaluators can see the integration seam.
     const payload = {
       to: emailTo,
       subject: `PNS SafeCity Report — ${rangeLabel}`,
@@ -237,7 +302,7 @@ export default function AnalyticsPage() {
         <div className="flex items-center gap-3">
           <h1 className="hud-label text-2xl text-gold-soft">ANALYTICS & REPORTING</h1>
           <span className="rounded border border-cyan/40 bg-cyan/10 px-2 py-0.5 text-[10px] font-bold text-cyan">
-            DATA: PERSISTED INCIDENT LOG
+            DATA: INCIDENT LOG + SEED HISTORY
           </span>
         </div>
         {canEdit && (
@@ -291,7 +356,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
           { label: 'Total Events', value: totalIncidents, color: 'text-cyan' },
           { label: 'Critical', value: highCount, color: 'text-danger' },
@@ -316,7 +381,7 @@ export default function AnalyticsPage() {
               <ResponsiveContainer width="100%" height={230}>
                 <BarChart data={modelChartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1B324F" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#94a3b8' }} />
+                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#94a3b8' }} interval={0} />
                   <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} />
                   <Tooltip contentStyle={{ backgroundColor: '#0B182B', border: '1px solid #C9A227' }} />
                   <Bar dataKey="value" fill="#22D3EE" radius={[3, 3, 0, 0]} />
@@ -362,14 +427,18 @@ export default function AnalyticsPage() {
           </div>
 
           <div className="rounded-lg border border-edge/50 bg-surface2/30 p-4">
-            <h3 className="hud-label text-sm text-gold-soft mb-3">VIOLATION TREND — 24H</h3>
+            <h3 className="hud-label text-sm text-gold-soft mb-3">VIOLATION TREND</h3>
             <ResponsiveContainer width="100%" height={230}>
               <LineChart data={timelineData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1B324F" />
-                <XAxis dataKey="time" tick={{ fontSize: 10, fill: '#94a3b8' }} interval={3} />
+                <XAxis
+                  dataKey="time"
+                  tick={{ fontSize: 10, fill: '#94a3b8' }}
+                  interval={timelineData.length > 31 ? 'preserveStartEnd' : 0}
+                />
                 <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} />
                 <Tooltip contentStyle={{ backgroundColor: '#0B182B', border: '1px solid #C9A227' }} />
-                <Line type="monotone" dataKey="events" stroke="#22D3EE" strokeWidth={2} dot={{ r: 3 }} />
+                <Line type="monotone" dataKey="events" stroke="#22D3EE" strokeWidth={2} dot={{ r: 2 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>

@@ -2,42 +2,69 @@ export type Role = 'super-admin' | 'operator' | 'guard'
 
 export type Severity = 'high' | 'medium' | 'low'
 
-export type TabId = 'wall' | 'map' | 'analytics' | 'incidents' | 'models' | 'trajectory'
+export type ThemeMode = 'dark' | 'light'
 
-/**
- * Layout presets supported by the Live Wall.
- *  - focus    : 1 Main + 6 Peripheral (default)
- *  - grid2x2  : 2×2 grid (4 streams)
- *  - grid3x3  : 3×3 grid (9 streams)
- *  - focus5   : 1 Main + 4 Split
- *  - full     : Single Main Fullscreen
- */
+export type TabId =
+  | 'overview'
+  | 'wall'
+  | 'map'
+  | 'models'
+  | 'forensics'
+  | 'trajectory'
+  | 'incidents'
+  | 'cameras'
+
 export type LayoutId = 'focus' | 'grid2x2' | 'grid3x3' | 'focus5' | 'full'
 
-/** Reporting period used by Analytics / Incident Log / PDF export. */
-export type ReportPeriod = 'today' | 'week' | 'month' | 'all' | 'custom'
+export type ReportPeriod = 'today' | 'week' | 'month' | 'year' | 'all' | 'custom'
 
-export type ModelCategory =
-  | 'weapon'
-  | 'fire'
-  | 'traffic'
-  | 'safety'
-  | 'anpr'
-  | 'person'
-  | 'accident'
+export type ModelCategory = 'traffic' | 'behaviour' | 'safety' | 'tracking'
+
+export interface ModelTelemetryCapture {
+  timestamp: string
+  cameraName: string
+  confidence: number
+  summary: string
+  plate?: string
+  plateConfidence?: number
+  vehicleColor?: string
+  vehicleMake?: string
+  speedKmh?: number
+  speedLimitKmh?: number
+  deltaSpeedKmh?: number
+  trackedDistanceM?: number
+  hasHelmet?: boolean
+  bikePlate?: string
+  crowdCount?: number
+  crowdThreshold?: number
+  fallPostureStatus?: string
+  medicalPriority?: 'URGENT' | 'MONITOR'
+  wallBreachZone?: string
+  intrusionVector?: string
+  parkingDurationSec?: number
+  noParkingZone?: string
+  reverseHeadingDegrees?: number
+  smokeDensityPct?: number
+  fireLuminescence?: string
+  accidentSeverity?: 'CRITICAL' | 'MODERATE'
+  reidTrackId?: string
+  trajectoryHandoff?: string[]
+}
 
 export interface AiModel {
   id: string
   name: string
   short: string
   category: ModelCategory
-  /** default severity per FYP proposal; user can override */
   severity: Severity
+  description: string
+  capturesList: string[]
+  liveActiveDetections: number
+  avgConfidence: number
+  captureTelemetry: ModelTelemetryCapture[]
 }
 
-/** A model firing at a specific second inside a looping camera clip. */
 export interface ClipEvent {
-  /** seconds into the clip */
   time: number
   modelId: string
   title: string
@@ -46,33 +73,38 @@ export interface ClipEvent {
   plate?: string
   vehicle?: string
   speed?: number
+  crowdCount?: number
+  telemetryExtra?: Partial<ModelTelemetryCapture>
 }
 
 export interface Camera {
   id: string
-  /** display number e.g. 1 => CAM 1 */
   index: number
   name: string
   zone: string
   ip: string
-  /** looping demo video from /videos */
   videoUrl: string
-  /** duration hint (sec) for looping */
   duration: number
-  /** AI models running on this camera */
   models: string[]
-  /** events fired by this camera's clip */
   events: ClipEvent[]
-  /** map position 0..100 */
   x: number
   y: number
-  /** true when the bound video was user-uploaded (blob URL, not persisted) */
   customVideo?: boolean
+}
+
+export interface NewCameraInput {
+  index: number
+  name: string
+  zone: string
+  ip: string
+  videoUrl: string
+  models: string[]
+  x: number
+  y: number
 }
 
 export interface Incident {
   id: string
-  /** wall-clock ISO when it fired */
   firedAt: number
   clockLabel: string
   cameraId: string
@@ -88,8 +120,10 @@ export interface Incident {
   plate?: string
   vehicle?: string
   speed?: number
+  crowdCount?: number
   acknowledged: boolean
   dispatched: boolean
+  telemetryExtra?: Partial<ModelTelemetryCapture>
 }
 
 export interface Toast {
@@ -99,4 +133,39 @@ export interface Toast {
   detail: string
   cameraLabel: string
   severity: Severity
+}
+
+export interface CpuSpecs {
+  model: string
+  percent: number
+  cores: number
+}
+
+export interface GpuSpecs {
+  model: string
+  utilPercent: number
+  vramUsedMb: number
+  vramTotalMb: number
+  tempC: number
+  cudaActive: boolean
+}
+
+export interface RamSpecs {
+  usedGb: number
+  totalGb: number
+  percent: number
+}
+
+export interface StorageSpecs {
+  usedGb: number
+  totalGb: number
+  percent: number
+}
+
+export interface HardwareTelemetry {
+  cpu: CpuSpecs
+  gpu: GpuSpecs
+  ram: RamSpecs
+  storage: StorageSpecs
+  fps: number
 }

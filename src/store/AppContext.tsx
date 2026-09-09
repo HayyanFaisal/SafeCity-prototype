@@ -8,28 +8,56 @@ import React, {
   useState,
 } from 'react'
 import type {
+  HardwareTelemetry,
+  ThemeMode,
   AiModel,
   Camera,
+  ClipEvent,
   Incident,
   LayoutId,
+  NewCameraInput,
   ReportPeriod,
   Role,
   Severity,
   TabId,
   Toast,
 } from '../types'
-import { AI_MODELS, CAMERAS, DUTY_OFFICER } from '../constants'
+import { AI_MODELS, CAMERAS, INITIAL_HARDWARE_SPECS, STORAGE_KEYS } from '../constants'
 import {
+  loadCameraCatalogue,
   loadCameraVideoUrls,
+  loadCameraSequence,
   loadFiredKeys,
   loadIncidents,
   loadSeverityOverrides,
+  saveCameraCatalogue,
+  saveCameraSequence,
   saveCameraVideoUrl,
   saveFiredKeys,
   saveIncidents,
   saveSeverityOverrides,
 } from '../lib/storage'
-import { blip, playSiren, stopSiren } from '../lib/audio'
+import { blip, playSiren, stopSiren, unlockAudio } from '../lib/audio'
+
+/**
+ * A lightweight pending entry for events that fired on a side (non-main)
+ * tile. These stay SILENT — no popup, no toast, no siren — until the camera
+ * is moved into the main tile, at which point they are announced once.
+ * (Item 5: alerts scoped to the main/focused camera only.)
+ */
+export interface ActivityEntry {
+  id: string
+  /** real incident id so announcements can ack the backing record */
+  incidentId: string
+  firedAt: number
+  cameraId: string
+  cameraIndex: number
+  cameraName: string
+  zone: string
+  event: string
+  severity: Severity
+  announced: boolean
+}
 
 interface AppState {
   // clock
@@ -39,6 +67,14 @@ interface AppState {
   role: Role
   setRole: (r: Role) => void
   canEdit: boolean
+
+  // theme
+  theme: ThemeMode
+  setTheme: (t: ThemeMode) => void
+  toggleTheme: () => void
+
+  // hardware telemetry
+  hardware: HardwareTelemetry
 
   // navigation
   tab: TabId
@@ -51,10 +87,13 @@ interface AppState {
   moveCamera: (id: string, x: number, y: number) => void
   updateCameraDetails: (
     id: string,
-    patch: Partial<Pick<Camera, 'name' | 'ip'>>,
+    patch: Partial<Pick<Camera, 'name' | 'ip' | 'zone' | 'index'>>,
   ) => void
   setCameraModels: (id: string, modelIds: string[]) => void
   toggleCameraModel: (id: string, modelId: string) => void
+  addCamera: (input: NewCameraInput) => string
+  deleteCamera: (id: string) => void
+  mountCustomVideo: (cameraId: string, file: File) => void
 
   // models & severity
   models: AiModel[]
@@ -74,7 +113,7 @@ interface AppState {
   speed: number
   setSpeed: (s: number) => void
 
-  // forensic playback panel
+  // forensic playback panel (rendered globally so it works from any tab)
   forensicCameraId: string | null
   openForensic: (id: string) => void
   closeForensic: () => void
@@ -85,56 +124,126 @@ interface AppState {
   dismissToast: (id: string) => void
   criticalAlert: Incident | null
   acknowledgeAlert: () => void
-  dispatchAlert: (incident: Incident) => void
   soundEnabled: boolean
   setSoundEnabled: (v: boolean) => void
   resetSimulation: () => void
+
+  // silent pending queue for side-tile events (internal — not rendered)
+  activityFeed: ActivityEntry[]
+  dismissFeedEntry: (id: string) => void
+  acknowledgeIncident: (id: string) => void
 
   // reporting period — shared by Analytics, Incident Log and PDF export
   reportPeriod: ReportPeriod
   setReportPeriod: (p: ReportPeriod) => void
   customRange: { from: number; to: number } | null
   setCustomRange: (r: { from: number; to: number } | null) => void
-
-  // dispatch log (whatsapp/sms simulation)
-  dispatchLog: DispatchEntry[]
-}
-
-export interface DispatchEntry {
-  id: string
-  incidentId: string
-  channel: 'WhatsApp' | 'SMS' | 'Call'
-  to: string
-  message: string
-  at: number
-  status: 'sending' | 'delivered'
 }
 
 const AppContext = createContext<AppState | null>(null)
 
-const DEFAULT_ORDER = CAMERAS.map((c) => c.id)
+/** Reconstruct the camera catalogue from persisted state, if any. */
+function hydrateCameras(): Camera[] {
+  const catalogue = loadCameraCatalogue()
+  if (catalogue) return catalogue
+  const overrides = loadCameraVideoUrls()
+  return CAMERAS.map((c) => {
+    const url = overrides[c.id]
+    if (!url) return c
+    return { ...c, videoUrl: url }
+  })
+}
+
+/**
+ * When a new camera is bound to one of the built-in inference clips, reuse
+ * the clip's known ClipEvents (filtered to the assigned models) so the new
+ * camera can participate in live alert generation immediately.
+ */
+function eventsForVideo(url: string, models: string[]): ClipEvent[] {
+  const src = CAMERAS.find((c) => c.videoUrl === url)
+  if (!src) return []
+  return src.events.filter((ev) => models.includes(ev.modelId))
+}
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [now, setNow] = useState(Date.now())
   const [role, setRole] = useState<Role>('super-admin')
-  const [tab, setTab] = useState<TabId>('wall')
+  const [tab, setTab] = useState<TabId>('overview')
 
-  // cameras hydrate persisted non-blob video overrides (blob URLs die with the
-  // page session and are never persisted)
-  const [cameras, setCameras] = useState<Camera[]>(() => {
-    const overrides = loadCameraVideoUrls()
-    return CAMERAS.map((c) => {
-      const url = overrides[c.id]
-      if (!url) return c
-      return { ...c, videoUrl: url }
-    })
+  const [theme, setThemeState] = useState<ThemeMode>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.theme)
+      return saved === 'light' ? 'light' : 'dark'
+    } catch {
+      return 'dark'
+    }
   })
+
+  const [hardware, setHardware] = useState<HardwareTelemetry>(INITIAL_HARDWARE_SPECS)
+
+  const setTheme = useCallback((newTheme: ThemeMode) => {
+    setThemeState(newTheme)
+    try {
+      localStorage.setItem(STORAGE_KEYS.theme, newTheme)
+    } catch {}
+  }, [])
+
+  const toggleTheme = useCallback(() => {
+    setTheme(theme === 'dark' ? 'light' : 'dark')
+  }, [theme, setTheme])
+
+  useEffect(() => {
+    const root = document.documentElement
+    if (theme === 'light') {
+      root.classList.add('light')
+      root.classList.remove('dark')
+    } else {
+      root.classList.add('dark')
+      root.classList.remove('light')
+    }
+  }, [theme])
+
+  // Periodic simulated live hardware jitter
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setHardware((prev) => {
+        const cpuJitter = Math.min(95, Math.max(12, prev.cpu.percent + (Math.random() * 6 - 3)))
+        const gpuJitter = Math.min(98, Math.max(30, prev.gpu.utilPercent + (Math.random() * 8 - 4)))
+        const vramJitter = Math.min(4096, Math.max(2800, Math.round(prev.gpu.vramUsedMb + (Math.random() * 60 - 30))))
+        const ramJitter = Math.min(32, Math.max(14, +(prev.ram.usedGb + (Math.random() * 0.4 - 0.2)).toFixed(1)))
+        const ramPct = Math.round((ramJitter / prev.ram.totalGb) * 100)
+        const fpsJitter = +(58.2 + (Math.random() * 2.4 - 1.2)).toFixed(1)
+
+        return {
+          ...prev,
+          cpu: { ...prev.cpu, percent: +cpuJitter.toFixed(1) },
+          gpu: { ...prev.gpu, utilPercent: +gpuJitter.toFixed(1), vramUsedMb: vramJitter },
+          ram: { ...prev.ram, usedGb: ramJitter, percent: ramPct },
+          fps: fpsJitter,
+        }
+      })
+    }, 2500)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const mountCustomVideo = useCallback((cameraId: string, file: File) => {
+    const url = URL.createObjectURL(file)
+    setCameras((prev) =>
+      prev.map((c) => (c.id === cameraId ? { ...c, videoUrl: url, customVideo: true } : c)),
+    )
+  }, [])
+
+  // cameras hydrate from the persisted catalogue (admin CRUD), else defaults
+  const [cameras, setCameras] = useState<Camera[]>(() => hydrateCameras())
   const [severityOverrides, setSeverityOverrides] = useState<Record<string, Severity>>(
     () => loadSeverityOverrides(),
   )
 
   const [layout, setLayout] = useState<LayoutId>('focus')
-  const [order, setOrder] = useState<string[]>(DEFAULT_ORDER)
+  const [order, setOrder] = useState<string[]>(() => {
+    const catalogue = loadCameraCatalogue()
+    return (catalogue ?? CAMERAS).map((c) => c.id)
+  })
   const [playing, setPlaying] = useState(true)
   const [speed, setSpeed] = useState(1)
 
@@ -142,7 +251,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
   const [criticalAlert, setCriticalAlert] = useState<Incident | null>(null)
   const [soundEnabled, setSoundEnabled] = useState(true)
-  const [dispatchLog, setDispatchLog] = useState<DispatchEntry[]>([])
+
+  // Silent pending queue for side-tile events (never rendered as a popup).
+  const [activityFeed, setActivityFeed] = useState<ActivityEntry[]>([])
 
   const [forensicCameraId, setForensicCameraId] = useState<string | null>(null)
 
@@ -157,9 +268,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => window.clearInterval(t)
   }, [])
 
+  // ---- audio unlock on first user interaction -----------------------------
+  useEffect(() => {
+    const unlock = () => {
+      unlockAudio()
+      window.removeEventListener('click', unlock, true)
+      window.removeEventListener('keydown', unlock, true)
+    }
+    window.addEventListener('click', unlock, true)
+    window.addEventListener('keydown', unlock, true)
+    return () => {
+      window.removeEventListener('click', unlock, true)
+      window.removeEventListener('keydown', unlock, true)
+    }
+  }, [])
+
+  // ---- A2: play/pause propagation to all mounted video elements -----------
+  useEffect(() => {
+    const els = document.querySelectorAll<HTMLVideoElement>('video[data-cam]')
+    els.forEach((el) => {
+      el.playbackRate = speed
+      if (playing) {
+        if (el.paused) void el.play().catch(() => {})
+      } else {
+        if (!el.paused) el.pause()
+      }
+    })
+  }, [playing, speed])
+
   // ---- persistence --------------------------------------------------------
-  // Fix 2: incidents persist across reloads; in-memory flow stays live but
-  // every change is written through to localStorage.
   useEffect(() => {
     saveIncidents(incidents)
   }, [incidents])
@@ -167,6 +304,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     saveSeverityOverrides(severityOverrides)
   }, [severityOverrides])
+
+  useEffect(() => {
+    saveCameraCatalogue(cameras)
+  }, [cameras])
 
   // ---- helpers ------------------------------------------------------------
   const getCamera = useCallback(
@@ -208,7 +349,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const updateCameraDetails = useCallback(
-    (id: string, patch: Partial<Pick<Camera, 'name' | 'ip'>>) => {
+    (id: string, patch: Partial<Pick<Camera, 'name' | 'ip' | 'zone' | 'index'>>) => {
       setCameras((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)))
     },
     [],
@@ -228,8 +369,51 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     )
   }, [])
 
+  // ---- camera CRUD (admin-only page) --------------------------------------
+  const sequenceRef = useRef(loadCameraSequence())
+
+  const addCamera = useCallback((input: NewCameraInput): string => {
+    const seq = sequenceRef.current + 1
+    sequenceRef.current = seq
+    saveCameraSequence(seq)
+    const index = input.index ?? seq
+    const id = `CAM-${String(index).padStart(2, '0')}`
+    const cam: Camera = {
+      id,
+      index,
+      name: input.name.trim() || `New Camera ${index}`,
+      zone: input.zone.trim() || 'Unassigned Zone',
+      ip: input.ip.trim() || '192.168.27.0',
+      videoUrl: input.videoUrl,
+      duration: 12,
+      models: [...input.models],
+      events: eventsForVideo(input.videoUrl, input.models),
+      x: input.x,
+      y: input.y,
+      customVideo: input.videoUrl.startsWith('blob:'),
+    }
+    setCameras((prev) => [...prev, cam])
+    setOrder((prev) => [...prev, id])
+    return id
+  }, [])
+
+  const deleteCamera = useCallback((id: string) => {
+    setCameras((prev) => prev.filter((c) => c.id !== id))
+    setOrder((prev) => {
+      const next = prev.filter((x) => x !== id)
+      return next.length > 0 ? next : []
+    })
+    // drop any silent pending entries for the removed camera
+    setActivityFeed((prev) => prev.filter((e) => e.cameraId !== id))
+    setCriticalAlert((cur) => (cur && cur.cameraId === id ? null : cur))
+  }, [])
+
   // ---- live wall ordering -------------------------------------------------
   const mainId = order[0]
+  const mainIdRef = useRef(mainId)
+  useEffect(() => {
+    mainIdRef.current = mainId
+  }, [mainId])
 
   const focusCamera = useCallback((id: string) => {
     setOrder((prev) => {
@@ -270,38 +454,46 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   // ---- alert engine -------------------------------------------------------
-  // Fix 1: fire-once-per-session dedupe. Key = camId:modelId:time (no loop
-  // counter, no cooldown). Once an event fires it may never fire again during
-  // this session, no matter how many times the clip loops. The set is
-  // persisted so a page reload also doesn't re-fire old events. Reset
-  // Simulation (admin) clears it for a deliberate fresh run.
-  const firedKeysRef = useRef<Set<string> | null>(null)
-  if (firedKeysRef.current === null) {
-    // lazy init once — the fire-once set survives reloads via localStorage
-    firedKeysRef.current = new Set(loadFiredKeys())
-  }
-  // stable non-null reference captured for closures (TS can't narrow the ref)
-  const firedKeys = firedKeysRef.current
+
+  // A4: fire-once-per-session dedupe. Key = camId:modelId:time.
+  const firedKeysRef = useRef<Set<string>>(new Set(loadFiredKeys()))
+  const firedKeys = firedKeysRef.current // stable reference — always the same Set
+
+  // A5: Per-event-instance announcement tracking (camId:modelId:clipTime).
+  // An event is "announced" once it has fired a visible alert/toast/siren.
+  const announcedKeysRef = useRef<Set<string>>(new Set())
 
   const camerasRef = useRef(cameras)
   const severityRef = useRef(severityOf)
   const playingRef = useRef(playing)
-  useEffect(() => {
-    camerasRef.current = cameras
-  }, [cameras])
-  useEffect(() => {
-    severityRef.current = severityOf
-  }, [severityOf])
-  useEffect(() => {
-    playingRef.current = playing
-  }, [playing])
+  const incidentsRef = useRef(incidents)
+  useEffect(() => { camerasRef.current = cameras }, [cameras])
+  useEffect(() => { severityRef.current = severityOf }, [severityOf])
+  useEffect(() => { playingRef.current = playing }, [playing])
+  useEffect(() => { incidentsRef.current = incidents }, [incidents])
 
   const pushIncident = useCallback((inc: Incident) => {
-    setIncidents((prev) => [inc, ...prev].slice(0, 2000))
+    setIncidents((prev) => {
+      // hard dedupe: a given incident id appears at most once in the log
+      if (prev.some((i) => i.id === inc.id)) return prev
+      return [inc, ...prev].slice(0, 2000)
+    })
   }, [])
 
+  const dismissFeedEntry = useCallback((id: string) => {
+    setActivityFeed((prev) => prev.filter((e) => e.id !== id))
+  }, [])
+
+  /**
+   * Item 5 — main-camera scoping:
+   *  - Camera in MAIN tile → high = critical alert + siren, medium = toast,
+   *    low = silent log.
+   *  - Camera in a SIDE tile → incident is logged to the shared store and a
+   *    silent pending entry is queued. NOTHING visible happens. When that
+   *    camera becomes main, the pending entry announces itself once.
+   */
   const fireEvent = useCallback(
-    (cam: Camera, ev: Camera['events'][number]) => {
+    (cam: Camera, ev: Camera['events'][number], clipKey: string) => {
       const sev = severityRef.current(ev.modelId)
       const at = Date.now()
       const clockLabel = new Date(at).toLocaleString('en-GB', { hour12: false })
@@ -325,28 +517,58 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         acknowledged: false,
         dispatched: false,
       }
+
+      // Always log to the shared incident store (single source of truth).
       pushIncident(inc)
 
       if (sev === 'high') {
+        // Critical: always announce immediately regardless of tile position
         setCriticalAlert((cur) => cur ?? inc)
-        // auto-float the offending camera to main stream
         focusCamera(cam.id)
-      } else if (sev === 'medium') {
-        blip()
-        const toast: Toast = {
-          id: `t-${inc.id}`,
-          incidentId: inc.id,
-          title: inc.event,
-          detail: inc.detail,
-          cameraLabel: `CAM ${cam.index} · ${cam.zone}`,
-          severity: sev,
+        // Audio is handled by the useEffect watching criticalAlert below
+      } else {
+        // Non-critical (medium/low): route based on tile position
+        const isMainCam = cam.id === mainIdRef.current
+        const announceKey = clipKey // reuse the same key structure
+
+        if (isMainCam) {
+          // Main tile: announce once, then mark announced
+          if (!announcedKeysRef.current.has(announceKey)) {
+            announcedKeysRef.current.add(announceKey)
+            if (sev === 'medium') {
+              blip()
+              const toast: Toast = {
+                id: `t-${inc.id}`,
+                incidentId: inc.id,
+                title: inc.event,
+                detail: inc.detail,
+                cameraLabel: `CAM ${cam.index} · ${cam.zone}`,
+                severity: sev,
+              }
+              setToasts((prev) => [...prev.slice(-2), toast])
+              window.setTimeout(() => {
+                setToasts((prev) => prev.filter((t) => t.id !== toast.id))
+              }, 5000)
+            }
+            // low severity on main = silent log (already done via pushIncident)
+          }
+        } else {
+          // Side tile: add to persistent activity feed only — no toast, no blip
+          const entry: ActivityEntry = {
+            id: `feed-${inc.id}`,
+            incidentId: inc.id,
+            firedAt: at,
+            cameraId: cam.id,
+            cameraIndex: cam.index,
+            cameraName: cam.name,
+            zone: cam.zone,
+            event: ev.title,
+            severity: sev,
+            announced: false,
+          }
+          setActivityFeed((prev) => [entry, ...prev].slice(0, 50))
         }
-        setToasts((prev) => [...prev.slice(-2), toast])
-        window.setTimeout(() => {
-          setToasts((prev) => prev.filter((t) => t.id !== toast.id))
-        }, 5000)
       }
-      // low = silent log only
     },
     [focusCamera, pushIncident],
   )
@@ -368,13 +590,58 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             if (firedKeys.has(key)) continue
             firedKeys.add(key)
             saveFiredKeys(Array.from(firedKeys))
-            fireEvent(cam, ev)
+            fireEvent(cam, ev, key)
           }
         }
       })
     }, 250)
     return () => window.clearInterval(interval)
   }, [fireEvent])
+
+  /**
+   * Item 5 — when the main camera changes (click/drag/swap), announce any
+   * silent entries that belong to the newly focused camera, exactly once.
+   * Edge cases: camera swapped into main mid-event, multiple side cameras
+   * queued simultaneously — each is announced on its own focus.
+   */
+  useEffect(() => {
+    setActivityFeed((prev) => {
+      const unannounced = prev.filter(
+        (e) => e.cameraId === mainId && !e.announced,
+      )
+      if (unannounced.length === 0) return prev
+
+      const liveIncidents = incidentsRef.current
+      unannounced.forEach((e) => {
+        if (announcedKeysRef.current.has(e.id)) return
+        announcedKeysRef.current.add(e.id)
+        const inc = liveIncidents.find((i) => i.id === e.incidentId)
+        if (e.severity === 'high') {
+          setCriticalAlert((cur) => cur ?? inc ?? null)
+        } else if (e.severity === 'medium') {
+          blip()
+          const toast: Toast = {
+            id: `t-announce-${e.id}`,
+            incidentId: e.incidentId,
+            title: e.event,
+            detail: inc?.detail ?? `${e.cameraName} — ${e.zone}`,
+            cameraLabel: `CAM ${e.cameraIndex} · ${e.zone}`,
+            severity: e.severity,
+          }
+          setToasts((prev) => [...prev.slice(-2), toast])
+          window.setTimeout(() => {
+            setToasts((tp) => tp.filter((t) => t.id !== toast.id))
+          }, 5000)
+        }
+        // low severity on focus = silent log (already logged)
+      })
+
+      return prev.map((e) =>
+        e.cameraId === mainId && !e.announced ? { ...e, announced: true } : e,
+      )
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mainId])
 
   // ---- alert controls -----------------------------------------------------
   const acknowledgeAlert = useCallback(() => {
@@ -389,43 +656,33 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     stopSiren()
   }, [])
 
-  const dispatchAlert = useCallback((incident: Incident) => {
-    const msg = `🚨 PNS SafeCity ALERT\n${incident.event} — CAM ${incident.cameraIndex}\nZone: ${incident.zone}\nConfidence: ${incident.confidence}%\nTime: ${incident.clockLabel}\nAction required.`
-    const id = `d-${incident.id}-${Date.now()}`
-    const entry: DispatchEntry = {
-      id,
-      incidentId: incident.id,
-      channel: 'WhatsApp',
-      to: `${DUTY_OFFICER.name} (${DUTY_OFFICER.phone})`,
-      message: msg,
-      at: Date.now(),
-      status: 'sending',
-    }
-    setDispatchLog((prev) => [entry, ...prev].slice(0, 50))
-    setIncidents((prev) => prev.map((i) => (i.id === incident.id ? { ...i, dispatched: true } : i)))
-    window.setTimeout(() => {
-      setDispatchLog((prev) =>
-        prev.map((d) => (d.id === id ? { ...d, status: 'delivered' } : d)),
-      )
-    }, 1400)
-  }, [])
-
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id))
   }, [])
 
+  const acknowledgeIncident = useCallback((incidentId: string) => {
+    setIncidents((prev) =>
+      prev.map((i) => (i.id === incidentId ? { ...i, acknowledged: true } : i)),
+    )
+    // Also remove from silent pending queue if present (feed id = 'feed-' + id)
+    setActivityFeed((prev) => prev.filter((e) => e.id !== `feed-${incidentId}`))
+  }, [])
+
   /**
-   * Admin-only: clears the fire-once set (and the persisted incident log) so a
-   * fresh demo run can deliberately replay the full event sequence.
+   * A4: Admin-only reset. Mutates the existing firedKeys Set in place so the
+   * stable reference used by the polling interval reflects the reset. Incident
+   * history (analytics) is preserved; only live session state clears.
    */
   const resetSimulation = useCallback(() => {
-    firedKeysRef.current = new Set()
+    firedKeys.clear()
     saveFiredKeys([])
+    announcedKeysRef.current.clear()
     setCriticalAlert(null)
     setToasts([])
+    setActivityFeed([])
     setIncidents([])
     stopSiren()
-  }, [])
+  }, [firedKeys])
 
   // siren tied to critical alert
   const soundRef = useRef(soundEnabled)
@@ -441,6 +698,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<AppState>(
     () => ({
       now,
+      theme,
+      setTheme,
+      toggleTheme,
+      hardware,
       role,
       setRole,
       canEdit,
@@ -453,6 +714,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       updateCameraDetails,
       setCameraModels,
       toggleCameraModel,
+      addCamera,
+      deleteCamera,
+      mountCustomVideo,
       models,
       severityOverrides,
       setSeverity,
@@ -475,24 +739,26 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       dismissToast,
       criticalAlert,
       acknowledgeAlert,
-      dispatchAlert,
       soundEnabled,
       setSoundEnabled,
       resetSimulation,
+      activityFeed,
+      dismissFeedEntry,
+      acknowledgeIncident,
       reportPeriod,
       setReportPeriod,
       customRange,
       setCustomRange,
-      dispatchLog,
     }),
     [
-      now, role, canEdit, tab, cameras, getCamera, setCameraVideo, moveCamera,
-      updateCameraDetails, setCameraModels, toggleCameraModel, models,
-      severityOverrides, setSeverity, severityOf, layout, order, focusCamera,
-      swapTiles, mainId, playing, speed, forensicCameraId, openForensic,
-      closeForensic, incidents, toasts, dismissToast, criticalAlert,
-      acknowledgeAlert, dispatchAlert, soundEnabled, resetSimulation, reportPeriod,
-      customRange, dispatchLog,
+      now, theme, setTheme, toggleTheme, hardware, role, canEdit, tab, cameras, getCamera, setCameraVideo, moveCamera,
+      updateCameraDetails, setCameraModels, toggleCameraModel, addCamera,
+      deleteCamera, mountCustomVideo, models, severityOverrides, setSeverity, severityOf, layout,
+      order, focusCamera, swapTiles, mainId, playing, speed, forensicCameraId,
+      openForensic, closeForensic, incidents, toasts, dismissToast,
+      criticalAlert, acknowledgeAlert, soundEnabled, resetSimulation,
+      activityFeed, dismissFeedEntry, acknowledgeIncident, reportPeriod,
+      customRange,
     ],
   )
 

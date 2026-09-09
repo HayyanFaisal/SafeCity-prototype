@@ -1,81 +1,154 @@
-import { Volume2, VolumeX, LogOut, RefreshCw, MessageCircle } from 'lucide-react'
+import {
+  Volume2,
+  VolumeX,
+  LogOut,
+  RefreshCw,
+  MessageCircle,
+  Sun,
+  Moon,
+  Cpu,
+  Activity,
+} from 'lucide-react'
 import { useApp } from '../store/AppContext'
 import { SITE_NAME, SITE_SHORT, SITE_TAGLINE, ROLE_LABELS, DUTY_OFFICER } from '../constants'
 import { fmtClock } from '../lib/format'
 import Crest from './ui/Crest'
 
 export default function TopBar() {
-  const { now, role, setRole, soundEnabled, setSoundEnabled, resetSimulation, canEdit } = useApp()
+  const {
+    now,
+    role,
+    setRole,
+    soundEnabled,
+    setSoundEnabled,
+    resetSimulation,
+    canEdit,
+    theme,
+    toggleTheme,
+    hardware,
+  } = useApp()
 
   const doReset = () => {
-    if (window.confirm('Reset Simulation? This clears the fired-events set and the incident log so the full event sequence can replay.')) {
+    if (
+      window.confirm(
+        'Reset Simulation? This clears the fired-events set and the incident log so the full event sequence can replay.',
+      )
+    ) {
       resetSimulation()
     }
   }
 
   return (
-    <header className="flex items-center justify-between border-b border-edge/50 bg-gradient-to-r from-deep via-surface2 to-deep px-6 py-4 shadow-lg">
+    <header className="flex items-center justify-between border-b border-edge/60 bg-gradient-to-r from-deep via-surface2 to-deep px-4 sm:px-6 py-2.5 shadow-lg select-none z-30 transition-colors">
       {/* Left: Branding */}
-      <div className="flex items-center gap-4">
-        <Crest size={44} />
+      <div className="flex items-center gap-3">
+        <Crest size={40} />
         <div className="min-w-0">
-          <div className="hud-label text-sm leading-tight text-gold-soft">{SITE_SHORT}</div>
-          <div className="text-xs text-slate-400">{SITE_TAGLINE}</div>
-          <div className="text-[10px] text-slate-500 leading-none">{SITE_NAME}</div>
+          <div className="hud-label text-sm leading-tight text-gold-soft font-bold tracking-wider">
+            {SITE_SHORT}
+          </div>
+          <div className="text-xs text-slate-400 font-medium">{SITE_TAGLINE}</div>
+          <div className="text-[10px] text-slate-500 hidden sm:block leading-none mt-0.5">
+            {SITE_NAME}
+          </div>
         </div>
-        {/* DEMO MODE tag — mock integrations are clearly labelled */}
-        <span className="ml-2 hidden lg:inline-flex items-center gap-1.5 rounded border border-warn/40 bg-warn/10 px-2 py-0.5 text-[10px] font-bold text-warn">
-          <span className="h-1.5 w-1.5 rounded-full bg-warn animate-pulse" />
-          DEMO MODE
-        </span>
       </div>
 
-      {/* Center: Clock + Status */}
-      <div className="flex items-center gap-8">
-        <div className="text-center">
-          <div className="hud-label text-xs text-slate-400 mb-1">SYSTEM TIME</div>
-          <div className="font-mono text-lg font-bold text-gold-soft tracking-widest">
+      {/* Center: Live Hardware Telemetry Strip (From FYP-Copy Sentinel) */}
+      <div className="hidden lg:flex items-center gap-3">
+        {/* CPU */}
+        <div
+          className="flex items-center gap-2 px-2.5 py-1 rounded-lg border border-edge2/60 bg-surface/60 text-xs font-mono"
+          title={hardware.cpu.model}
+        >
+          <Cpu className="h-3.5 w-3.5 text-cyan" />
+          <span className="text-slate-400">CPU:</span>
+          <span className="font-bold text-cyan">{hardware.cpu.percent}%</span>
+        </div>
+
+        {/* GPU */}
+        <div
+          className="flex items-center gap-2 px-2.5 py-1 rounded-lg border border-edge2/60 bg-surface/60 text-xs font-mono"
+          title={`${hardware.gpu.model} (VRAM: ${hardware.gpu.vramUsedMb}/${hardware.gpu.vramTotalMb} MB)`}
+        >
+          <Activity className="h-3.5 w-3.5 text-emerald-400" />
+          <span className="text-slate-400">RTX 3050:</span>
+          <span className="font-bold text-emerald-400">{hardware.gpu.utilPercent}%</span>
+          <span className="text-[10px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
+            CUDA
+          </span>
+        </div>
+
+        {/* RAM */}
+        <div className="hidden xl:flex items-center gap-2 px-2.5 py-1 rounded-lg border border-edge2/60 bg-surface/60 text-xs font-mono">
+          <span className="text-slate-400">RAM:</span>
+          <span className="font-bold text-gold-soft">{hardware.ram.usedGb}G</span>
+          <span className="text-slate-500">({hardware.ram.percent}%)</span>
+        </div>
+
+        {/* FPS */}
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-edge2/60 bg-surface/60 text-xs font-mono text-slate-300">
+          <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+          <span>{hardware.fps} FPS</span>
+        </div>
+
+        {/* System Time */}
+        <div className="text-center px-3 font-mono">
+          <div className="text-[10px] text-slate-400 hud-label leading-none">SYSTEM TIME</div>
+          <div className="text-sm font-bold text-gold-soft tracking-wider mt-0.5">
             {fmtClock(new Date(now))}
           </div>
         </div>
-        <div className="hidden xl:block text-center">
-          <div className="hud-label text-[10px] text-slate-500 mb-1">DUTY OFFICER</div>
-          <div className="text-xs font-semibold text-cyan">{DUTY_OFFICER.name}</div>
-          <div className="text-[10px] font-mono text-slate-500">{DUTY_OFFICER.phone}</div>
-        </div>
       </div>
 
-      {/* Right: Controls */}
-      <div className="flex items-center gap-4">
-        {/* WhatsApp quick link (real deep-link to Muhammad Ammar) */}
+      {/* Right: Controls & Actions */}
+      <div className="flex items-center gap-2 sm:gap-3">
+        {/* Dark / Light Mode Switcher (From FYP-Copy) */}
+        <button
+          onClick={toggleTheme}
+          className="btn-icon"
+          title={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+        >
+          {theme === 'dark' ? (
+            <Sun className="h-4.5 w-4.5 text-amber-400 hover:rotate-45 transition-transform" />
+          ) : (
+            <Moon className="h-4.5 w-4.5 text-indigo-500 hover:-rotate-12 transition-transform" />
+          )}
+        </button>
+
+        {/* WhatsApp quick link to Muhammad Ammar */}
         <a
           href={`https://wa.me/${DUTY_OFFICER.whatsapp}`}
           target="_blank"
           rel="noopener noreferrer"
           className="btn-icon"
-          title={`WhatsApp ${DUTY_OFFICER.name}`}
+          title={`WhatsApp Officer ${DUTY_OFFICER.name} (${DUTY_OFFICER.phone})`}
         >
-          <MessageCircle className="h-5 w-5 text-green-400" />
+          <MessageCircle className="h-4.5 w-4.5 text-green-400" />
         </a>
 
-        {/* Sound toggle */}
+        {/* Siren sound toggle */}
         <button
           onClick={() => setSoundEnabled(!soundEnabled)}
           className="btn-icon"
-          title={soundEnabled ? 'Mute alerts' : 'Enable alerts'}
+          title={soundEnabled ? 'Mute Alert Siren' : 'Enable Alert Siren'}
         >
-          {soundEnabled ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5 opacity-50" />}
+          {soundEnabled ? (
+            <Volume2 className="h-4.5 w-4.5 text-cyan" />
+          ) : (
+            <VolumeX className="h-4.5 w-4.5 opacity-50 text-slate-400" />
+          )}
         </button>
 
-        {/* Reset Simulation (admin) — Fix 1 control */}
+        {/* Reset Simulation button (admin) */}
         {canEdit && (
           <button
             onClick={doReset}
-            className="btn gap-2 text-xs border-danger/40 text-danger hover:border-danger/70"
+            className="btn gap-1.5 text-xs border-danger/40 text-danger hover:border-danger/70 hover:bg-danger/10"
             title="Clear fired-events + incident log to replay the full event sequence"
           >
-            <RefreshCw className="h-4 w-4" />
-            Reset Simulation
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Reset</span>
           </button>
         )}
 
@@ -83,19 +156,19 @@ export default function TopBar() {
         <select
           value={role}
           onChange={(e) => setRole(e.target.value as any)}
-          className="btn text-xs"
-          title="Switch user role (admin has full edit access)"
+          className="btn text-xs cursor-pointer font-sans"
+          title="Switch user role"
         >
           {(Object.keys(ROLE_LABELS) as Array<keyof typeof ROLE_LABELS>).map((r) => (
-            <option key={r} value={r}>
+            <option key={r} value={r} className="bg-surface text-slate-200">
               {ROLE_LABELS[r]}
             </option>
           ))}
         </select>
 
-        {/* Logout (placeholder) */}
-        <button className="btn-icon" title="Logout (placeholder)">
-          <LogOut className="h-5 w-5" />
+        {/* Logout */}
+        <button className="btn-icon" title="Logout session">
+          <LogOut className="h-4.5 w-4.5" />
         </button>
       </div>
     </header>

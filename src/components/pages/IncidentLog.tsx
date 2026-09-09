@@ -9,6 +9,7 @@ const PERIOD_OPTIONS: Array<{ id: ReportPeriod; label: string }> = [
   { id: 'today', label: 'Today' },
   { id: 'week', label: 'This Week' },
   { id: 'month', label: 'This Month' },
+  { id: 'year', label: 'This Year' },
   { id: 'all', label: 'All Time' },
 ]
 
