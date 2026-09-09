@@ -1,8 +1,8 @@
 import type { AiModel, Camera, HardwareTelemetry, ModelCategory, Role, Severity } from './types'
 
-export const SITE_NAME = 'ISLAMABAD / RAWALPINDI — AI COMMAND & CONTROL CENTER'
-export const SITE_SHORT = 'SafeCity Command Center'
-export const SITE_TAGLINE = 'Intelligent Traffic & Urban Safety AI Suite'
+export const SITE_NAME = 'Sahil-e-Baseera — AI COMMAND & CONTROL CENTER'
+export const SITE_SHORT = 'Sahil-e-Baseera'
+export const SITE_TAGLINE = 'TRAFFIC SAFETY MONITOR'
 export const DEFAULT_IP_PREFIX = '192.168.27'
 
 export const DUTY_OFFICER = {

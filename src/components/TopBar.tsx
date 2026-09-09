@@ -1,175 +1,195 @@
 import {
   Volume2,
   VolumeX,
-  LogOut,
   RefreshCw,
-  MessageCircle,
   Sun,
   Moon,
   Cpu,
+  Shield,
+  Menu,
+  ChevronRight,
   Activity,
 } from 'lucide-react'
 import { useApp } from '../store/AppContext'
-import { SITE_NAME, SITE_SHORT, SITE_TAGLINE, ROLE_LABELS, DUTY_OFFICER } from '../constants'
+import { SITE_TAGLINE, ROLE_LABELS } from '../constants'
 import { fmtClock } from '../lib/format'
-import Crest from './ui/Crest'
 
 export default function TopBar() {
   const {
-    now,
     role,
     setRole,
     soundEnabled,
     setSoundEnabled,
     resetSimulation,
-    canEdit,
     theme,
     toggleTheme,
     hardware,
+    tab,
   } = useApp()
 
   const doReset = () => {
     if (
       window.confirm(
-        'Reset Simulation? This clears the fired-events set and the incident log so the full event sequence can replay.',
+        'Reset Simulation? This clears the fired-events set and incident log so the full sequence can replay.',
       )
     ) {
       resetSimulation()
     }
   }
 
+  // Format date like: "Wed, Aug 19"
+  const dateFormatted = new Date().toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  })
+
+  // Tab Breadcrumb Label
+  const tabNames: Record<string, string> = {
+    overview: 'Main Safety Overview',
+    models: 'Vehicle Speed Radar & AI Models',
+    wall: 'Live Multi-Camera Wall',
+    map: 'GIS Tactical Map',
+    forensics: 'Forensics & Video Playback',
+    trajectory: 'Re-ID Trajectory Search',
+    incidents: 'Incident Log & E-Challans',
+    cameras: 'Camera Node Feeds',
+  }
+
   return (
-    <header className="flex items-center justify-between border-b border-edge/60 bg-gradient-to-r from-deep via-surface2 to-deep px-4 sm:px-6 py-2.5 shadow-lg select-none z-30 transition-colors">
-      {/* Left: Branding */}
-      <div className="flex items-center gap-3">
-        <Crest size={40} />
-        <div className="min-w-0">
-          <div className="hud-label text-sm leading-tight text-gold-soft font-bold tracking-wider">
-            {SITE_SHORT}
+    <header className="flex items-center justify-between px-4 sm:px-6 py-2.5 z-30 transition-all select-none border-b border-edge">
+      {/* Left: Branding & Breadcrumbs */}
+      <div className="flex items-center gap-3.5">
+        {/* Neomorphic Hamburger button */}
+        <button
+          className="neo-btn p-2 text-slate-400 hover:text-blue-500 rounded-xl"
+          title="Menu"
+        >
+          <Menu className="h-4.5 w-4.5" />
+        </button>
+
+        {/* Shield Crest */}
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600/15 border border-blue-500/30 text-blue-500 shadow-sm">
+            <Shield className="h-5 w-5 fill-blue-500/20 stroke-blue-600 dark:stroke-blue-400" />
           </div>
-          <div className="text-xs text-slate-400 font-medium">{SITE_TAGLINE}</div>
-          <div className="text-[10px] text-slate-500 hidden sm:block leading-none mt-0.5">
-            {SITE_NAME}
+          <div>
+            <div className="text-base font-extrabold tracking-tight leading-none text-slate-900 dark:text-white font-sans">
+              Sahil-e-Baseera
+            </div>
+            <div className="text-[10px] font-semibold tracking-wider text-slate-500 leading-none mt-1 uppercase">
+              {SITE_TAGLINE}
+            </div>
           </div>
+        </div>
+
+        {/* Breadcrumb path */}
+        <div className="hidden md:flex items-center gap-1.5 ml-4 pl-4 border-l border-edge text-xs">
+          <span className="text-slate-400 font-medium">Home</span>
+          <ChevronRight className="h-3.5 w-3.5 text-slate-400" />
+          <span className="font-bold text-blue-600 dark:text-blue-400">
+            {tabNames[tab] || 'Command Center'}
+          </span>
         </div>
       </div>
 
-      {/* Center: Live Hardware Telemetry Strip (From FYP-Copy Sentinel) */}
-      <div className="hidden lg:flex items-center gap-3">
+      {/* Center: Live Hardware Telemetry Jitter Strip */}
+      <div className="hidden xl:flex items-center gap-2.5 font-mono text-xs">
         {/* CPU */}
-        <div
-          className="flex items-center gap-2 px-2.5 py-1 rounded-lg border border-edge2/60 bg-surface/60 text-xs font-mono"
-          title={hardware.cpu.model}
-        >
+        <div className="neo-card-sm px-2.5 py-1 flex items-center gap-2" title={hardware.cpu.model}>
           <Cpu className="h-3.5 w-3.5 text-cyan" />
           <span className="text-slate-400">CPU:</span>
-          <span className="font-bold text-cyan">{hardware.cpu.percent}%</span>
+          <span className="font-bold text-cyan">{hardware.cpu.percent.toFixed(1)}%</span>
         </div>
 
         {/* GPU */}
-        <div
-          className="flex items-center gap-2 px-2.5 py-1 rounded-lg border border-edge2/60 bg-surface/60 text-xs font-mono"
-          title={`${hardware.gpu.model} (VRAM: ${hardware.gpu.vramUsedMb}/${hardware.gpu.vramTotalMb} MB)`}
-        >
-          <Activity className="h-3.5 w-3.5 text-emerald-400" />
-          <span className="text-slate-400">RTX 3050:</span>
-          <span className="font-bold text-emerald-400">{hardware.gpu.utilPercent}%</span>
-          <span className="text-[10px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
-            CUDA
-          </span>
+        <div className="neo-card-sm px-2.5 py-1 flex items-center gap-2" title={hardware.gpu.model}>
+          <Activity className="h-3.5 w-3.5 text-gold-soft" />
+          <span className="text-slate-400">GPU:</span>
+          <span className="font-bold text-gold-soft">{hardware.gpu.utilPercent.toFixed(1)}%</span>
+          <span className="text-[10px] text-slate-500">({hardware.gpu.tempC}°C)</span>
         </div>
 
         {/* RAM */}
-        <div className="hidden xl:flex items-center gap-2 px-2.5 py-1 rounded-lg border border-edge2/60 bg-surface/60 text-xs font-mono">
+        <div className="neo-card-sm px-2.5 py-1 flex items-center gap-2">
           <span className="text-slate-400">RAM:</span>
-          <span className="font-bold text-gold-soft">{hardware.ram.usedGb}G</span>
-          <span className="text-slate-500">({hardware.ram.percent}%)</span>
+          <span className="font-bold text-emerald-500">
+            {hardware.ram.usedGb.toFixed(1)}/{hardware.ram.totalGb}G
+          </span>
         </div>
 
-        {/* FPS */}
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-edge2/60 bg-surface/60 text-xs font-mono text-slate-300">
-          <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
-          <span>{hardware.fps} FPS</span>
-        </div>
-
-        {/* System Time */}
-        <div className="text-center px-3 font-mono">
-          <div className="text-[10px] text-slate-400 hud-label leading-none">SYSTEM TIME</div>
-          <div className="text-sm font-bold text-gold-soft tracking-wider mt-0.5">
-            {fmtClock(new Date(now))}
-          </div>
+        {/* INFERENCE FPS */}
+        <div className="neo-card-sm px-2.5 py-1 flex items-center gap-2">
+          <span className="text-slate-400">FPS:</span>
+          <span className="font-bold text-sky-500">{hardware.fps.toFixed(1)}</span>
         </div>
       </div>
 
-      {/* Right: Controls & Actions */}
-      <div className="flex items-center gap-2 sm:gap-3">
-        {/* Dark / Light Mode Switcher (From FYP-Copy) */}
-        <button
-          onClick={toggleTheme}
-          className="btn-icon"
-          title={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
-        >
-          {theme === 'dark' ? (
-            <Sun className="h-4.5 w-4.5 text-amber-400 hover:rotate-45 transition-transform" />
-          ) : (
-            <Moon className="h-4.5 w-4.5 text-indigo-500 hover:-rotate-12 transition-transform" />
-          )}
-        </button>
+      {/* Right: Status, Controls, Clock */}
+      <div className="flex items-center gap-3">
+        {/* Live Indicator pill from screenshot */}
+        <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
+          <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping"></span>
+          <span>Cameras Live &amp; Active</span>
+        </div>
 
-        {/* WhatsApp quick link to Muhammad Ammar */}
-        <a
-          href={`https://wa.me/${DUTY_OFFICER.whatsapp}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn-icon"
-          title={`WhatsApp Officer ${DUTY_OFFICER.name} (${DUTY_OFFICER.phone})`}
-        >
-          <MessageCircle className="h-4.5 w-4.5 text-green-400" />
-        </a>
-
-        {/* Siren sound toggle */}
-        <button
-          onClick={() => setSoundEnabled(!soundEnabled)}
-          className="btn-icon"
-          title={soundEnabled ? 'Mute Alert Siren' : 'Enable Alert Siren'}
-        >
-          {soundEnabled ? (
-            <Volume2 className="h-4.5 w-4.5 text-cyan" />
-          ) : (
-            <VolumeX className="h-4.5 w-4.5 opacity-50 text-slate-400" />
-          )}
-        </button>
-
-        {/* Reset Simulation button (admin) */}
-        {canEdit && (
-          <button
-            onClick={doReset}
-            className="btn gap-1.5 text-xs border-danger/40 text-danger hover:border-danger/70 hover:bg-danger/10"
-            title="Clear fired-events + incident log to replay the full event sequence"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Reset</span>
-          </button>
-        )}
-
-        {/* Role switcher */}
+        {/* Role Selector */}
         <select
           value={role}
           onChange={(e) => setRole(e.target.value as any)}
-          className="btn text-xs cursor-pointer font-sans"
-          title="Switch user role"
+          className="neo-inset-sm text-xs px-2.5 py-1 rounded-lg border border-edge bg-surface2 font-medium text-slate-700 dark:text-slate-300 focus:outline-none"
         >
-          {(Object.keys(ROLE_LABELS) as Array<keyof typeof ROLE_LABELS>).map((r) => (
-            <option key={r} value={r} className="bg-surface text-slate-200">
-              {ROLE_LABELS[r]}
+          {Object.entries(ROLE_LABELS).map(([k, label]) => (
+            <option key={k} value={k}>
+              {label}
             </option>
           ))}
         </select>
 
-        {/* Logout */}
-        <button className="btn-icon" title="Logout session">
-          <LogOut className="h-4.5 w-4.5" />
+        {/* Reset */}
+        <button
+          onClick={doReset}
+          className="neo-btn p-2 text-slate-400 hover:text-amber-500"
+          title="Reset Simulation"
+        >
+          <RefreshCw className="h-4 w-4" />
         </button>
+
+        {/* Audio Toggle */}
+        <button
+          onClick={() => setSoundEnabled(!soundEnabled)}
+          className="neo-btn p-2 text-slate-400 hover:text-cyan"
+          title={soundEnabled ? 'Mute Alert Audio' : 'Unmute Audio'}
+        >
+          {soundEnabled ? (
+            <Volume2 className="h-4 w-4 text-cyan" />
+          ) : (
+            <VolumeX className="h-4 w-4" />
+          )}
+        </button>
+
+        {/* Theme Toggle Button (Light/Dark Neomorphism) */}
+        <button
+          onClick={toggleTheme}
+          className="neo-btn p-2 text-slate-700 dark:text-slate-200 hover:text-blue-600"
+          title={theme === 'dark' ? 'Switch to Light Neomorphism' : 'Switch to Dark Neomorphism'}
+        >
+          {theme === 'dark' ? (
+            <Sun className="h-4 w-4 text-amber-400" />
+          ) : (
+            <Moon className="h-4 w-4 text-blue-600" />
+          )}
+        </button>
+
+        {/* Digital Clock & Date */}
+        <div className="text-right leading-none pl-2 border-l border-edge">
+          <div className="font-mono text-sm font-bold tracking-tight text-slate-900 dark:text-slate-100">
+            {fmtClock(new Date())}
+          </div>
+          <div className="text-[10px] text-slate-500 font-medium mt-0.5">
+            {dateFormatted}
+          </div>
+        </div>
       </div>
     </header>
   )
