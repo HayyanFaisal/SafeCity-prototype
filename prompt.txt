@@ -1,0 +1,81 @@
+PROMPT: Build a Commercial-Grade "Safe Smart City" AI Surveillance Command Center Web Prototype with Interactive Custom GIS Map Plotter
+
+ROLE & SYSTEM OVERVIEW:
+You are an expert Principal Frontend Engineer specializing in enterprise CCTV Video Management Systems (VMS) like Hikvision iVMS-4200 and Dahua DSS. Build a responsive, dark-themed, pixel-perfect web application prototype for the "Naval Anchorage / Pindi Housing Society AI Safe City Command Center".
+
+TECH STACK:
+- Framework: React / Next.js (TypeScript) or Single-Page HTML5/JS app.
+- Styling: Tailwind CSS (Theme: Dark Slate/Zinc `#0B0F19`, surface `#111827`, borders `#1F2937`, accents Cyan `#06B6D4`, Red `#EF4444`, Amber `#F59E0B`).
+- Icons: Lucide-React (Plus, Video, ShieldAlert, Siren, Flame, Crosshair, AlertTriangle, UserCheck, Car, Settings, Grid, Sliders, MapPin, Download, Lock, Play, Pause, Upload, Map, Edit3, Check, Trash2).
+- Media Engine: Native HTML5 `<video>` and `URL.createObjectURL()` for mounting local `.mp4` streams and custom map images.
+
+----------------------------------------------------------------------
+1. ROLE-BASED ACCESS CONTROL (RBAC)
+----------------------------------------------------------------------
+Top-bar Role Switcher dropdown to dynamically toggle permissions during live FYP evaluations:
+- Super Admin: Full access (Upload maps, place/configure/link map camera pins, assign AI models, manage video feeds, adjust alert priorities).
+- Operator / Analyst: View live grid, interact with map pins to inspect feeds, run Forensic Trajectory queries, toggle model views (cannot edit map layout or system settings).
+- Security Guard / View-Only: Live Grid and Map viewing only, receives alert popups, no editing capabilities.
+
+----------------------------------------------------------------------
+2. INTERACTIVE CUSTOM MAP BUILDER & GIS OVERLAY (NEW FEATURE)
+----------------------------------------------------------------------
+Create a dedicated "Society GIS Map" Tab with two modes:
+
+A) MAP MANAGEMENT / EDIT MODE (Admin Only):
+- Upload Map Image: Button to upload a local map image (`.jpg`, `.png`, `.svg`) using `URL.createObjectURL()`. Render the map dynamically on a scalable container canvas.
+- Click-to-Plot Camera Nodes: When "Edit Mode" is toggled ON:
+  * Clicking anywhere on the map container calculates relative percentage coordinates (`left: X%`, `top: Y%`) so pins stay accurately positioned when resized.
+  * Clicking opens a "Configure Camera Pin" Modal:
+    1. Input Camera ID & Name (e.g., "Cam-05: Sector A Main Entrance").
+    2. Input IP Address (Default prefix: "192.168.27.X").
+    3. Select Active AI Models (Checkboxes for Gun, Speed, Helmet, Fire/Smoke, ANPR, etc.).
+    4. Link Video Stream: Local `.mp4` file input button (`URL.createObjectURL(file)`) to bind a local video directly to this pin.
+- Pin Management: Hovering/clicking a pin in Edit Mode allows editing details or deleting the pin.
+
+B) SAVED INTERACTIVE VIEW MODE:
+- When "Edit Mode" is OFF, the map locks into operational mode.
+- Pin Indicators: Render custom camera pin icons with tooltip labels showing Camera Name & IP.
+- Alert Beacon Effects: Pins attached to cameras with active alert events pulse with glowing Red (High Priority) or Amber (Medium Priority) halos.
+- Direct Jump to Playback: Clicking any camera pin on the map immediately transitions the screen into "Playback & Forensic Inspection Mode" for that specific camera's linked `.mp4` stream!
+
+----------------------------------------------------------------------
+3. MULTI-GRID LIVE MONITORING & DYNAMIC VIDEO MOUNTING
+----------------------------------------------------------------------
+- Empty Tile State: Unpopulated grid tiles render a dark wireframe with a "+" icon: "Click to Mount Local Video (.mp4)". Clicking opens file selection (`<input type="file" accept="video/mp4">`).
+- Grid Layout Selector:
+  1. "Hikvision 1 Main + 5 Sub Grid" (1 Large primary tile taking 60% area, 2 small stacked right, 2 small bottom left, 1 small bottom right corner).
+  2. "2x2 Grid" (4 equal tiles).
+  3. "3x3 Grid" (9 equal tiles).
+  4. "Single Main Fullscreen".
+- Drag-and-Drop Tile Swapping: Users can drag any camera tile and drop it onto another to instantly swap screen locations (e.g., drag a small tile to the Main Big tile).
+- Simultaneous Playback: All mounted local `.mp4` videos play concurrently. Provide a global "Play / Pause All Streams" master toggle.
+
+----------------------------------------------------------------------
+4. PLAYBACK & FORENSIC INSPECTION MODE
+----------------------------------------------------------------------
+Clicking any active video tile or clicking a camera pin on the Map opens the single-stream Forensic Inspection Panel:
+- Precision Timeline Seeker: Custom video scrubber synchronized with `.mp4` playback.
+- Hardcoded Event Timeline Markers: Render visual icon flags along the seeker bar corresponding to pre-configured JSON event timestamps (e.g., @ 00:12 -> Red Siren "Gun Detected", @ 00:45 -> Yellow Car "Speed Violation 68 km/h").
+- Marker Interaction: Hovering over a flag shows an event tooltip card (Event Name, Timestamp, Confidence Score). Clicking a flag seeks the video directly to that exact second.
+
+----------------------------------------------------------------------
+5. MODEL PRIORITY MANAGER & AUTOMATED ALERT ENGINE
+----------------------------------------------------------------------
+- Settings Drawer - Drag-and-Drop Model Priority Buckets:
+  * HIGH PRIORITY: Gun/Weapon Detection, Fire & Smoke, Unattended Object/Bomb Threat.
+  * MEDIUM PRIORITY: Vehicle Crash/Accident, Crowd Gathering/Fights.
+  * LOW PRIORITY: Helmet Missing, Over-speeding, Underage Driving.
+- Automated Trigger Responses (Matching `currentTime` with hardcoded event timestamps):
+  * HIGH PRIORITY: Urgent Red Modal Popup with sound toggle, flashing red neon border around source camera tile, glowing red pulse on Map pin, and a "Focus Stream" button.
+  * MEDIUM / LOW PRIORITY: Non-intrusive floating toast notification in the top-right corner with a "Jump to Timestamp" action.
+
+----------------------------------------------------------------------
+6. ADDITIONAL SMART PANELS & FORENSIC TOOLS
+----------------------------------------------------------------------
+- Forensic Trajectory Search Tab: Query input for License Plate ("ABC-1234") or Target Person Profile. Displays an interactive flowchart timeline mapping the chronological route across society camera nodes.
+- Incident Alert Log Tab: Filterable table of all detected events (Severity, IP Address, Camera Name, Timestamp) with an "Export Official Incident Fine Report (PDF)" download action.
+- Model Assignment Drawer: List of all 7-8 AI models with switches to enable/disable specific models per camera stream.
+
+DESIGN REQUIREMENTS:
+Command-center aesthetics, crisp slate typography, glowing status badges, smooth transitions, glassmorphism panels, and 100% working dynamic state for file uploads, map plotting, pin-clicking, tile swapping, timestamp seeking, and role toggling.

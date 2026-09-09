@@ -1,0 +1,273 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   SAHIL-E-BASEERA - NEOMORPHIC DESIGN SYSTEM (DARK & LIGHT)
+   ========================================================================== */
+
+:root,
+.dark,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-base: #060d19;
+  --bg-deep: #0a1526;
+  --bg-surface: #0d1a2d;
+  --bg-surface2: #12233c;
+  --bg-panel: #0e1d33;
+  --border-edge: #192f4c;
+  --border-edge2: #223f66;
+
+  --text-main: #f1f5f9;
+  --text-sub: #94a3b8;
+  --text-muted: #64748b;
+
+  /* Dark Neomorphism Dual Shadows */
+  --neo-raised: -4px -4px 10px rgba(25, 45, 75, 0.35), 4px 4px 14px rgba(0, 0, 0, 0.75);
+  --neo-raised-sm: -2px -2px 6px rgba(25, 45, 75, 0.3), 3px 3px 8px rgba(0, 0, 0, 0.65);
+  --neo-inset: inset -3px -3px 7px rgba(25, 45, 75, 0.4), inset 3px 3px 7px rgba(0, 0, 0, 0.75);
+  --neo-inset-sm: inset -2px -2px 4px rgba(25, 45, 75, 0.4), inset 2px 2px 4px rgba(0, 0, 0, 0.7);
+
+  --header-bg: #0a1526;
+  --sidebar-bg: #08111f;
+  --card-bg: #0d1a2d;
+}
+
+.light,
+[data-theme="light"] {
+  color-scheme: light;
+  --bg-base: #eaeff7;
+  --bg-deep: #eef3f9;
+  --bg-surface: #eef3f9;
+  --bg-surface2: #e2eaf5;
+  --bg-panel: #eef3f9;
+  --border-edge: rgba(163, 177, 198, 0.4);
+  --border-edge2: rgba(163, 177, 198, 0.55);
+
+  --text-main: #0f172a;
+  --text-sub: #334155;
+  --text-muted: #64748b;
+
+  /* Light Neomorphism Dual Shadows (White Highlight top-left + Cool Slate bottom-right) */
+  --neo-raised: -6px -6px 14px rgba(255, 255, 255, 0.9), 6px 6px 14px rgba(163, 177, 198, 0.52);
+  --neo-raised-sm: -3px -3px 7px rgba(255, 255, 255, 0.95), 3px 3px 7px rgba(163, 177, 198, 0.45);
+  --neo-inset: inset -3px -3px 6px rgba(255, 255, 255, 0.95), inset 3px 3px 6px rgba(163, 177, 198, 0.48);
+  --neo-inset-sm: inset -2px -2px 4px rgba(255, 255, 255, 0.95), inset 2px 2px 4px rgba(163, 177, 198, 0.4);
+
+  --header-bg: #eef3f9;
+  --sidebar-bg: #eaeff7;
+  --card-bg: #eef3f9;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: 'Rajdhani', Inter, system-ui, sans-serif;
+  letter-spacing: 0.01em;
+  background-color: var(--bg-base);
+  color: var(--text-main);
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #1b324f;
+  border-radius: 8px;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #24466b;
+}
+.light ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 8px;
+}
+.light ::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* ==========================================================================
+   NEOMORPHIC UTILITIES
+   ========================================================================== */
+
+.neo-card {
+  background-color: var(--card-bg);
+  box-shadow: var(--neo-raised);
+  border: 1px solid var(--border-edge);
+  border-radius: 18px;
+  transition: all 0.25s ease;
+}
+
+.neo-card-sm {
+  background-color: var(--card-bg);
+  box-shadow: var(--neo-raised-sm);
+  border: 1px solid var(--border-edge);
+  border-radius: 14px;
+}
+
+.neo-inset {
+  background-color: var(--bg-surface2);
+  box-shadow: var(--neo-inset);
+  border-radius: 14px;
+}
+
+.neo-inset-sm {
+  background-color: var(--bg-surface2);
+  box-shadow: var(--neo-inset-sm);
+  border-radius: 10px;
+}
+
+.neo-btn {
+  background-color: var(--bg-surface);
+  box-shadow: var(--neo-raised-sm);
+  border: 1px solid var(--border-edge);
+  border-radius: 12px;
+  color: var(--text-main);
+  transition: all 0.2s ease;
+}
+.neo-btn:hover:not(:disabled) {
+  box-shadow: var(--neo-raised);
+  transform: translateY(-1px);
+}
+.neo-btn:active:not(:disabled) {
+  box-shadow: var(--neo-inset-sm);
+  transform: translateY(0);
+}
+
+.neo-btn-primary {
+  background: linear-gradient(135deg, #1d4ed8, #2563eb);
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.35);
+  border-radius: 12px;
+  border: none;
+  transition: all 0.2s ease;
+}
+.neo-btn-primary:hover:not(:disabled) {
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.45);
+  transform: translateY(-1px);
+}
+.neo-btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* Nav Item Neomorphism */
+.neo-nav-btn {
+  background-color: var(--bg-surface);
+  box-shadow: var(--neo-raised-sm);
+  border: 1px solid var(--border-edge);
+  border-radius: 14px;
+  transition: all 0.2s ease;
+}
+.neo-nav-btn:hover {
+  box-shadow: var(--neo-raised);
+  transform: translateY(-1px);
+}
+.neo-nav-btn.active {
+  background-color: var(--bg-surface2);
+  box-shadow: var(--neo-inset-sm);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+/* Range input slider styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  background: transparent;
+}
+input[type="range"]:focus {
+  outline: none;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 9999px;
+  background-color: var(--bg-surface2);
+  box-shadow: var(--neo-inset-sm);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 20px;
+  width: 20px;
+  border-radius: 50%;
+  background: #3b82f6;
+  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.5);
+  margin-top: -6px;
+  cursor: pointer;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  background: #2563eb;
+}
+
+@layer components {
+  .hud-label {
+    @apply font-display uppercase tracking-[0.16em];
+  }
+}
+
+/* Light mode specific component adjustments */
+.light header {
+  background: #eef3f9 !important;
+  border-bottom-color: rgba(163, 177, 198, 0.4) !important;
+  box-shadow: 0 4px 14px -6px rgba(163, 177, 198, 0.5) !important;
+}
+
+.light aside {
+  background: #eaeff7 !important;
+  border-right-color: rgba(163, 177, 198, 0.4) !important;
+  box-shadow: 4px 0 14px -6px rgba(163, 177, 198, 0.4) !important;
+}
+
+.light .text-white {
+  color: #0f172a !important;
+}
+.light .text-slate-200 {
+  color: #1e293b !important;
+}
+.light .text-slate-300 {
+  color: #334155 !important;
+}
+.light .text-slate-400 {
+  color: #475569 !important;
+}
+.light .text-slate-500 {
+  color: #64748b !important;
+}
+
+.light .card,
+.light .glass {
+  background-color: #eef3f9 !important;
+  border-color: rgba(163, 177, 198, 0.4) !important;
+  box-shadow: -6px -6px 14px rgba(255, 255, 255, 0.9), 6px 6px 14px rgba(163, 177, 198, 0.52) !important;
+}
+
+.light .btn {
+  background-color: #eef3f9 !important;
+  border-color: rgba(163, 177, 198, 0.45) !important;
+  color: #1e293b !important;
+  box-shadow: -3px -3px 7px rgba(255, 255, 255, 0.95), 3px 3px 7px rgba(163, 177, 198, 0.45) !important;
+}
+.light .btn:hover {
+  background-color: #f4f8fd !important;
+}
+
+.light .border-edge {
+  border-color: rgba(163, 177, 198, 0.4) !important;
+}
+.light .border-edge2 {
+  border-color: rgba(163, 177, 198, 0.55) !important;
+}
